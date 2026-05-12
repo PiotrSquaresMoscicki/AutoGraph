@@ -80,6 +80,11 @@ let renameSession = null; // { type: 'node'|'edge', key: string, initialValue: s
 let pendingRename = null; // { type: 'node'|'edge', key: string }
 let panState = null;         // { startX, startY, startTx, startTy }
 let pinchState = null;       // { startDist, startMidX, startMidY, startTx, startTy, startS }
+// Double-tap detection for touch devices (browser won't synthesise dblclick when
+// touch-action:none is set).  Tracks the most recent single-finger background tap.
+let lastBackgroundTap = null; // { x, y, time } | null
+const DOUBLE_TAP_MS = 300;   // max ms between taps to count as double-tap
+const DOUBLE_TAP_PX = 30;    // max movement (px) for a touch to count as a tap
 let needsInitialFit = true; // fit content into view after the first render
 
 // ---------- History ----------
@@ -541,6 +546,8 @@ graphSvg.addEventListener('touchstart', (ev) => {
     };
   } else if (ev.touches.length === 2) {
     // Two fingers: start pinch-zoom (also handles simultaneous pan via midpoint).
+    // A multi-finger gesture is never a tap, so discard any pending double-tap.
+    lastBackgroundTap = null;
     panState = null;
     const midX = (ev.touches[0].clientX + ev.touches[1].clientX) / 2 - rect.left;
     const midY = (ev.touches[0].clientY + ev.touches[1].clientY) / 2 - rect.top;
@@ -592,10 +599,40 @@ window.addEventListener('touchend', (ev) => {
     const t = ev.changedTouches[0];
     if (!t) { cancelDrag(); } else { finishDragAt(t.clientX, t.clientY); }
   }
-  // All fingers lifted: clear all states.
+  // All fingers lifted: clear all states, then check for double-tap.
   if (ev.touches.length === 0) {
+    const savedPan = panState;
+    const wasPinch = pinchState !== null;
     panState = null;
     pinchState = null;
+
+    // Double-tap detection (browser won't fire dblclick when touch-action:none).
+    // A candidate tap: single-finger background touch that barely moved.
+    const tapTouch = ev.changedTouches[0];
+    if (savedPan && !wasPinch && tapTouch) {
+      const moved = Math.hypot(tapTouch.clientX - savedPan.startX, tapTouch.clientY - savedPan.startY);
+      if (moved <= DOUBLE_TAP_PX) {
+        const now = Date.now();
+        if (lastBackgroundTap) {
+          const dt = now - lastBackgroundTap.time;
+          const dist = Math.hypot(tapTouch.clientX - lastBackgroundTap.x, tapTouch.clientY - lastBackgroundTap.y);
+          if (dt <= DOUBLE_TAP_MS && dist <= DOUBLE_TAP_PX) {
+            // Second tap close to the first: treat as double-tap → add node.
+            lastBackgroundTap = null;
+            addNode(undefined, { select: true, rename: true });
+            return;
+          }
+        }
+        // First tap (or too far/too slow from previous): record it.
+        lastBackgroundTap = { x: tapTouch.clientX, y: tapTouch.clientY, time: now };
+      } else {
+        // Finger moved — it was a pan, not a tap. Cancel double-tap sequence.
+        lastBackgroundTap = null;
+      }
+    } else if (wasPinch) {
+      // A pinch gesture resets double-tap tracking.
+      lastBackgroundTap = null;
+    }
     return;
   }
   // Lifted one finger during a two-finger pinch: transition to single-finger pan

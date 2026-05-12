@@ -64,6 +64,12 @@ let suppressDotSync = false;
 let renameSession = null; // { type: 'node'|'edge', key: string, initialValue: string }
 let pendingRename = null; // { type: 'node'|'edge', key: string }
 
+// ---------- History ----------
+const HISTORY_LIMIT = 100;
+const undoStack = [];
+const redoStack = [];
+let dotDebounceTimer = null;
+
 // ---------- Helpers ----------
 function freshNodeId() {
   while (state.nodes.some((n) => n.id === `n${state.nextId}`)) state.nextId++;
@@ -78,6 +84,50 @@ function isTextEditingElement(el) {
 function setStatus(msg, isError = false) {
   statusEl.textContent = msg || '';
   statusEl.classList.toggle('error', !!isError);
+}
+
+// ---------- History helpers ----------
+function snapshotState() {
+  return structuredClone({
+    name: state.name,
+    nodes: state.nodes,
+    edges: state.edges,
+    selected: state.selected,
+    nextId: state.nextId,
+  });
+}
+
+function pushSnapshot() {
+  undoStack.push(snapshotState());
+  if (undoStack.length > HISTORY_LIMIT) undoStack.shift();
+  redoStack.length = 0;
+}
+
+function restoreState(snapshot) {
+  state.name = snapshot.name;
+  state.nodes = snapshot.nodes;
+  state.edges = snapshot.edges;
+  state.selected = snapshot.selected;
+  state.nextId = snapshot.nextId;
+}
+
+function undo() {
+  clearTimeout(dotDebounceTimer);
+  dotDebounceTimer = null;
+  if (undoStack.length === 0) return;
+  redoStack.push(snapshotState());
+  restoreState(undoStack.pop());
+  render();
+}
+
+function redo() {
+  clearTimeout(dotDebounceTimer);
+  dotDebounceTimer = null;
+  if (redoStack.length === 0) return;
+  undoStack.push(snapshotState());
+  if (undoStack.length > HISTORY_LIMIT) undoStack.shift();
+  restoreState(redoStack.pop());
+  render();
 }
 
 // ---------- Rendering ----------
@@ -375,9 +425,29 @@ renameInput.addEventListener('blur', () => {
   commitRenameEditor();
 });
 
-// Keyboard: delete selection + rename shortcuts.
+// Keyboard: delete selection + rename shortcuts + undo/redo.
 window.addEventListener('keydown', (ev) => {
   const ae = document.activeElement;
+
+  // Undo/redo: active everywhere except non-DOT text fields so the browser's
+  // native text undo is preserved in <input> / contenteditable elements, but
+  // the DOT textarea round-trips through graph history instead.
+  if ((ev.ctrlKey || ev.metaKey) && !ev.altKey) {
+    const inOtherTextField = isTextEditingElement(ae) && ae !== dotEl;
+    if (!inOtherTextField) {
+      if (ev.key === 'z' && !ev.shiftKey) {
+        ev.preventDefault();
+        undo();
+        return;
+      }
+      if ((ev.key === 'z' && ev.shiftKey) || ev.key === 'y') {
+        ev.preventDefault();
+        redo();
+        return;
+      }
+    }
+  }
+
   if (isTextEditingElement(ae)) return;
   if ((ev.key === 'Delete' || ev.key === 'Backspace') && state.selected) {
     ev.preventDefault();
@@ -393,6 +463,7 @@ window.addEventListener('keydown', (ev) => {
 
 // ---------- Model mutations ----------
 function addNode(label, { select = false, rename = false } = {}) {
+  pushSnapshot();
   const id = freshNodeId();
   const lbl = label ?? id.toUpperCase();
   state.nodes.push({ id, label: lbl });
@@ -409,6 +480,7 @@ function addEdge(from, to) {
     render();
     return;
   }
+  pushSnapshot();
   state.edges.push({ from, to, label: '' });
   render();
 }
@@ -439,6 +511,7 @@ function clearSelection() {
 
 function deleteSelection() {
   if (!state.selected) return;
+  pushSnapshot();
   if (state.selected.type === 'node') {
     const id = state.selected.key;
     state.nodes = state.nodes.filter((n) => n.id !== id);
@@ -508,11 +581,13 @@ function commitRenameEditor() {
   if (session.type === 'node') {
     const node = state.nodes.find((n) => n.id === session.key);
     if (!node || node.label === next) return;
+    pushSnapshot();
     node.label = next;
   } else {
     const [from, to] = session.key.split('->');
     const edge = state.edges.find((e) => e.from === from && e.to === to);
     if (!edge || (edge.label ?? '') === next) return;
+    pushSnapshot();
     edge.label = next;
   }
   render();
@@ -538,6 +613,12 @@ function openRenameEditor(type, key) {
 // ---------- DOT textarea: edits drive the model ----------
 dotEl.addEventListener('input', () => {
   if (suppressDotSync) return;
+  // Debounced snapshot: one undo step per continuous typing burst.
+  if (dotDebounceTimer === null) {
+    pushSnapshot(); // capture state before this burst
+  }
+  clearTimeout(dotDebounceTimer);
+  dotDebounceTimer = setTimeout(() => { dotDebounceTimer = null; }, 400);
   const src = dotEl.value;
   try {
     const parsed = parse(src);
@@ -631,6 +712,7 @@ fileInput.addEventListener('change', async () => {
   try {
     const text = await file.text();
     const parsed = parse(text); // throws on malformed DOT
+    pushSnapshot();
     state.nodes = parsed.nodes;
     state.edges = parsed.edges;
     state.selected = null;

@@ -18,6 +18,7 @@ document.querySelector('#app').innerHTML = `
     <div id="graph-pane" tabindex="0">
       <div id="graph"></div>
       <svg id="drag-line"><line x1="0" y1="0" x2="0" y2="0" stroke="#3182ce" stroke-width="2" stroke-dasharray="5,4"/></svg>
+      <svg id="marquee-layer"><rect x="0" y="0" width="0" height="0"/></svg>
     </div>
     <div id="dot-pane">
       <label for="dot">DOT source (single source of truth)</label>
@@ -37,7 +38,7 @@ const state = {
   edges: [
     { from: 'a', to: 'b', label: '' },
   ],
-  selected: null, // { type: 'node'|'edge', key: string }
+  selected: new Set(), // Set<'node:key' | 'edge:key'>
   nextId: 3,
   viewport: { tx: 0, ty: 0, s: 1 },
 };
@@ -49,6 +50,8 @@ const dotEl = document.querySelector('#dot');
 const statusEl = document.querySelector('#status');
 const dragLine = document.querySelector('#drag-line line');
 const dragSvg = document.querySelector('#drag-line');
+const marqueeSvg = document.querySelector('#marquee-layer');
+const marqueeRect = document.querySelector('#marquee-layer rect');
 const btnSave = document.querySelector('#btn-save');
 const btnLoad = document.querySelector('#btn-load');
 const btnFit = document.querySelector('#btn-fit');
@@ -56,6 +59,7 @@ const btnToggleDot = document.querySelector('#btn-toggle-dot');
 const fileInput = document.querySelector('#file-input');
 const renameInput = document.createElement('input');
 dragSvg.style.display = 'none';
+marqueeSvg.style.display = 'none';
 renameInput.type = 'text';
 renameInput.id = 'inline-rename';
 renameInput.hidden = true;
@@ -80,6 +84,8 @@ let renameSession = null; // { type: 'node'|'edge', key: string, initialValue: s
 let pendingRename = null; // { type: 'node'|'edge', key: string }
 let panState = null;         // { startX, startY, startTx, startTy }
 let pinchState = null;       // { startDist, startMidX, startMidY, startTx, startTy, startS }
+let marqueeState = null;     // { startX, startY, x, y, width, height, additive, moved }
+let suppressNextBackgroundClick = false;
 // Double-tap detection for touch devices (browser won't synthesise dblclick when
 // touch-action:none is set).  Tracks the most recent single-finger background tap.
 let lastBackgroundTap = null; // { x, y, time } | null
@@ -105,6 +111,40 @@ function freshNodeId() {
 function edgeKey(e) { return `${e.from}->${e.to}`; }
 function isTextEditingElement(el) {
   return !!(el && (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT' || el.isContentEditable));
+}
+function selectionRef(type, key) { return `${type}:${key}`; }
+function parseSelectionRef(ref) {
+  const i = ref.indexOf(':');
+  if (i < 0) return null;
+  const type = ref.slice(0, i);
+  const key = ref.slice(i + 1);
+  if ((type !== 'node' && type !== 'edge') || !key) return null;
+  return { type, key };
+}
+function normalizeSelection(rawSelected) {
+  if (rawSelected instanceof Set) return rawSelected;
+  if (Array.isArray(rawSelected)) return new Set(rawSelected);
+  if (rawSelected && rawSelected.type && rawSelected.key) {
+    return new Set([selectionRef(rawSelected.type, rawSelected.key)]);
+  }
+  return new Set();
+}
+function hasSelection() {
+  return state.selected.size > 0;
+}
+function setSingleSelection(type, key) {
+  state.selected.clear();
+  state.selected.add(selectionRef(type, key));
+}
+function toggleSelection(type, key) {
+  const ref = selectionRef(type, key);
+  if (state.selected.has(ref)) state.selected.delete(ref);
+  else state.selected.add(ref);
+}
+function getSingleSelection() {
+  if (state.selected.size !== 1) return null;
+  const onlyRef = state.selected.values().next().value;
+  return parseSelectionRef(onlyRef);
 }
 
 // ---------- Viewport helpers ----------
@@ -190,7 +230,7 @@ function snapshotState() {
     name: state.name,
     nodes: state.nodes,
     edges: state.edges,
-    selected: state.selected,
+    selected: Array.from(state.selected),
     nextId: state.nextId,
   });
 }
@@ -205,7 +245,7 @@ function restoreState(snapshot) {
   state.name = snapshot.name;
   state.nodes = snapshot.nodes;
   state.edges = snapshot.edges;
-  state.selected = snapshot.selected;
+  state.selected = normalizeSelection(snapshot.selected);
   state.nextId = snapshot.nextId;
 }
 
@@ -287,13 +327,17 @@ async function render({ updateDotText = true } = {}) {
 }
 
 function reapplySelection(svgEl) {
-  if (!state.selected) return;
-  if (state.selected.type === 'node') {
-    const g = findNodeGroup(svgEl, state.selected.key);
-    if (g) g.classList.add('selected');
-  } else {
-    const g = findEdgeGroup(svgEl, state.selected.key);
-    if (g) g.classList.add('selected');
+  if (!hasSelection()) return;
+  for (const ref of state.selected) {
+    const sel = parseSelectionRef(ref);
+    if (!sel) continue;
+    if (sel.type === 'node') {
+      const g = findNodeGroup(svgEl, sel.key);
+      if (g) g.classList.add('selected');
+    } else {
+      const g = findEdgeGroup(svgEl, sel.key);
+      if (g) g.classList.add('selected');
+    }
   }
 }
 
@@ -416,6 +460,83 @@ function cancelDrag() {
   dragSvg.style.display = 'none';
 }
 
+function boxesIntersect(a, b) {
+  return a.x <= b.x + b.width &&
+    a.x + a.width >= b.x &&
+    a.y <= b.y + b.height &&
+    a.y + a.height >= b.y;
+}
+
+function beginMarquee(clientX, clientY, additive) {
+  const rect = graphPane.getBoundingClientRect();
+  const startX = clientX - rect.left;
+  const startY = clientY - rect.top;
+  marqueeState = { startX, startY, x: startX, y: startY, width: 0, height: 0, additive, moved: false };
+  marqueeRect.setAttribute('x', `${startX}`);
+  marqueeRect.setAttribute('y', `${startY}`);
+  marqueeRect.setAttribute('width', '0');
+  marqueeRect.setAttribute('height', '0');
+  marqueeSvg.style.display = 'block';
+}
+
+function updateMarquee(clientX, clientY) {
+  if (!marqueeState) return;
+  const rect = graphPane.getBoundingClientRect();
+  const x = clientX - rect.left;
+  const y = clientY - rect.top;
+  const left = Math.min(marqueeState.startX, x);
+  const top = Math.min(marqueeState.startY, y);
+  const width = Math.abs(x - marqueeState.startX);
+  const height = Math.abs(y - marqueeState.startY);
+  marqueeState.x = left;
+  marqueeState.y = top;
+  marqueeState.width = width;
+  marqueeState.height = height;
+  marqueeState.moved = marqueeState.moved || width > 2 || height > 2;
+  marqueeRect.setAttribute('x', `${left}`);
+  marqueeRect.setAttribute('y', `${top}`);
+  marqueeRect.setAttribute('width', `${width}`);
+  marqueeRect.setAttribute('height', `${height}`);
+}
+
+function finishMarquee() {
+  if (!marqueeState) return;
+  const ms = marqueeState;
+  marqueeState = null;
+  marqueeSvg.style.display = 'none';
+  if (ms.moved) suppressNextBackgroundClick = true;
+  const w0 = screenToWorld(ms.x, ms.y);
+  const w1 = screenToWorld(ms.x + ms.width, ms.y + ms.height);
+  const worldRect = {
+    x: Math.min(w0.x, w1.x),
+    y: Math.min(w0.y, w1.y),
+    width: Math.abs(w1.x - w0.x),
+    height: Math.abs(w1.y - w0.y),
+  };
+  const selectedNodes = new Set();
+  const next = ms.additive ? new Set(state.selected) : new Set();
+  for (const g of graphSvg.querySelectorAll('g.node')) {
+    const id = getTitle(g);
+    if (!id) continue;
+    let bbox;
+    try { bbox = g.getBBox(); } catch { continue; }
+    if (boxesIntersect(bbox, worldRect)) {
+      selectedNodes.add(id);
+      next.add(selectionRef('node', id));
+    }
+  }
+  // Marquee edge rule: select edges only when both endpoint nodes are selected
+  // by the marquee hit-test rectangle.
+  for (const e of state.edges) {
+    if (selectedNodes.has(e.from) && selectedNodes.has(e.to)) {
+      next.add(selectionRef('edge', edgeKey(e)));
+    }
+  }
+  state.selected = next;
+  render();
+  graphPane.focus({ preventScroll: true });
+}
+
 function attachGraphInteractions(svgEl) {
   // Node interactions
   for (const g of svgEl.querySelectorAll('g.node')) {
@@ -437,7 +558,8 @@ function attachGraphInteractions(svgEl) {
 
     g.addEventListener('click', (ev) => {
       ev.stopPropagation();
-      selectNode(id);
+      if (ev.ctrlKey || ev.metaKey) selectNode(id, { toggle: true });
+      else selectNode(id);
     });
 
     g.addEventListener('dblclick', (ev) => {
@@ -453,7 +575,8 @@ function attachGraphInteractions(svgEl) {
     addEdgeHitArea(g);
     g.addEventListener('click', (ev) => {
       ev.stopPropagation();
-      selectEdge(key);
+      if (ev.ctrlKey || ev.metaKey) selectEdge(key, { toggle: true });
+      else selectEdge(key);
     });
     g.addEventListener('dblclick', (ev) => {
       ev.stopPropagation();
@@ -518,14 +641,20 @@ graphPane.addEventListener('touchmove', (ev) => {
 graphSvg.addEventListener('mousedown', (ev) => {
   if (ev.button !== 0) return;
   if (dragState) return; // a node drag-to-connect is active
+  if (ev.target.closest('g.node, g.edge')) return;
   ev.preventDefault();
-  panState = {
-    startX: ev.clientX,
-    startY: ev.clientY,
-    startTx: state.viewport.tx,
-    startTy: state.viewport.ty,
-  };
-  graphPane.style.cursor = 'grabbing';
+  if (ev.shiftKey) {
+    beginMarquee(ev.clientX, ev.clientY, ev.ctrlKey || ev.metaKey);
+    graphPane.style.cursor = 'crosshair';
+  } else {
+    panState = {
+      startX: ev.clientX,
+      startY: ev.clientY,
+      startTx: state.viewport.tx,
+      startTy: state.viewport.ty,
+    };
+    graphPane.style.cursor = 'grabbing';
+  }
 });
 
 // Touch pan and pinch-zoom: touchstart on the SVG background.
@@ -564,6 +693,10 @@ graphSvg.addEventListener('touchstart', (ev) => {
 
 // Pan mousemove on window so panning continues even when cursor leaves the pane.
 window.addEventListener('mousemove', (ev) => {
+  if (marqueeState) {
+    updateMarquee(ev.clientX, ev.clientY);
+    return;
+  }
   if (!panState) return;
   state.viewport.tx = panState.startTx + (ev.clientX - panState.startX);
   state.viewport.ty = panState.startTy + (ev.clientY - panState.startY);
@@ -573,10 +706,12 @@ window.addEventListener('mousemove', (ev) => {
 
 window.addEventListener('mouseup', (ev) => {
   if (dragState) finishDragAt(ev.clientX, ev.clientY);
+  if (marqueeState) finishMarquee();
   if (panState) {
     panState = null;
     graphPane.style.cursor = '';
   }
+  if (!panState && !marqueeState) graphPane.style.cursor = '';
 });
 
 // Wheel zoom — centered on cursor position.
@@ -658,6 +793,10 @@ window.addEventListener('touchcancel', () => {
 graphPane.addEventListener('click', (ev) => {
   // Ignore clicks that originated on a node/edge (those stopPropagation already).
   if (ev.target.closest('g.node, g.edge')) return;
+  if (suppressNextBackgroundClick) {
+    suppressNextBackgroundClick = false;
+    return;
+  }
   clearSelection();
   graphPane.focus({ preventScroll: true });
 });
@@ -712,15 +851,16 @@ window.addEventListener('keydown', (ev) => {
   }
 
   if (isTextEditingElement(ae)) return;
-  if ((ev.key === 'Delete' || ev.key === 'Backspace') && state.selected) {
+  if ((ev.key === 'Delete' || ev.key === 'Backspace') && hasSelection()) {
     ev.preventDefault();
     deleteSelection();
     return;
   }
-  if ((ev.key === 'F2' || ev.key === 'Enter') && state.selected) {
+  const single = getSingleSelection();
+  if ((ev.key === 'F2' || ev.key === 'Enter') && single) {
     ev.preventDefault();
-    if (state.selected.type === 'node') renameNode(state.selected.key);
-    else renameEdge(state.selected.key);
+    if (single.type === 'node') renameNode(single.key);
+    else renameEdge(single.key);
   }
   // Viewport keyboard shortcuts: +/= zoom in, - zoom out, 0 reset 1:1.
   if (ev.key === '+' || ev.key === '=') {
@@ -744,9 +884,9 @@ window.addEventListener('keydown', (ev) => {
   // Shift+Tab: same but with reversed edge direction (new → selected).
   // addNode with rename:true sets compositeAction=true so addEdge below
   // skips its own pushSnapshot — the whole sequence is one undo entry.
-  if (ev.key === 'Tab' && state.selected?.type === 'node' && ae === graphPane) {
+  if (ev.key === 'Tab' && single?.type === 'node' && ae === graphPane) {
     ev.preventDefault();
-    const fromId = state.selected.key;
+    const fromId = single.key;
     const newId = addNode(undefined, { select: true, rename: true });
     if (ev.shiftKey) {
       addEdge(newId, fromId);
@@ -763,7 +903,7 @@ function addNode(label, { select = false, rename = false } = {}) {
   const lbl = label ?? id.toUpperCase();
   state.nodes.push({ id, label: lbl });
   const shouldSelect = select || rename;
-  if (shouldSelect) state.selected = { type: 'node', key: id };
+  if (shouldSelect) setSingleSelection('node', id);
   if (rename) {
     pendingRename = { type: 'node', key: id };
     // Mark a composite transaction: the following addEdge (triggered by
@@ -795,38 +935,43 @@ function renameEdge(key) {
   openRenameEditor('edge', key);
 }
 
-function selectNode(id) {
-  state.selected = { type: 'node', key: id };
+function selectNode(id, { toggle = false } = {}) {
+  if (toggle) toggleSelection('node', id);
+  else setSingleSelection('node', id);
   render();
   graphPane.focus({ preventScroll: true });
 }
 
-function selectEdge(key) {
-  state.selected = { type: 'edge', key };
+function selectEdge(key, { toggle = false } = {}) {
+  if (toggle) toggleSelection('edge', key);
+  else setSingleSelection('edge', key);
   render();
   graphPane.focus({ preventScroll: true });
 }
 
 function clearSelection() {
-  if (!state.selected) return;
-  state.selected = null;
+  if (!hasSelection()) return;
+  state.selected.clear();
   render();
 }
 
 function deleteSelection() {
-  if (!state.selected) return;
+  if (!hasSelection()) return;
   pushSnapshot();
-  if (state.selected.type === 'node') {
-    const id = state.selected.key;
-    state.nodes = state.nodes.filter((n) => n.id !== id);
-    state.edges = state.edges.filter((e) => e.from !== id && e.to !== id);
-  } else {
-    const [from, to] = state.selected.key.split('->');
-    // Remove the first matching edge (model may not have duplicates anyway).
-    const idx = state.edges.findIndex((e) => e.from === from && e.to === to);
-    if (idx >= 0) state.edges.splice(idx, 1);
+  const selectedNodes = new Set();
+  const selectedEdges = new Set();
+  for (const ref of state.selected) {
+    const sel = parseSelectionRef(ref);
+    if (!sel) continue;
+    if (sel.type === 'node') selectedNodes.add(sel.key);
+    else selectedEdges.add(sel.key);
   }
-  state.selected = null;
+  state.nodes = state.nodes.filter((n) => !selectedNodes.has(n.id));
+  state.edges = state.edges.filter((e) => {
+    if (selectedNodes.has(e.from) || selectedNodes.has(e.to)) return false;
+    return !selectedEdges.has(edgeKey(e));
+  });
+  state.selected.clear();
   render();
 }
 
@@ -933,13 +1078,19 @@ dotEl.addEventListener('input', () => {
     state.nodes = parsed.nodes;
     state.edges = parsed.edges;
     // Drop selection if it no longer refers to a real element.
-    if (state.selected) {
-      if (state.selected.type === 'node' && !state.nodes.some((n) => n.id === state.selected.key)) {
-        state.selected = null;
-      } else if (state.selected.type === 'edge') {
-        const [f, t] = state.selected.key.split('->');
-        if (!state.edges.some((e) => e.from === f && e.to === t)) state.selected = null;
+    if (hasSelection()) {
+      const nextSelected = new Set();
+      for (const ref of state.selected) {
+        const sel = parseSelectionRef(ref);
+        if (!sel) continue;
+        if (sel.type === 'node') {
+          if (state.nodes.some((n) => n.id === sel.key)) nextSelected.add(ref);
+        } else {
+          const [f, t] = sel.key.split('->');
+          if (state.edges.some((e) => e.from === f && e.to === t)) nextSelected.add(ref);
+        }
       }
+      state.selected = nextSelected;
     }
     dotEl.classList.remove('invalid');
     render({ updateDotText: false });
@@ -1025,7 +1176,7 @@ fileInput.addEventListener('change', async () => {
     pushSnapshot();
     state.nodes = parsed.nodes;
     state.edges = parsed.edges;
-    state.selected = null;
+    state.selected.clear();
     // Reset nextId to avoid colliding with imported ids like n1, n2, ...
     state.nextId = 1;
     // Use the file's base name as the suggested save name.

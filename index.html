@@ -3,11 +3,73 @@
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/vite.svg" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>static_web_service_template</title>
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"
+    />
+    <meta name="theme-color" content="#1a1a1a" />
+    <title>AutoGraph — Interactive Auto-Layout Graph Editor</title>
   </head>
   <body>
-    <div id="app"></div>
+    <div id="app">
+      <header class="toolbar" role="toolbar" aria-label="AutoGraph toolbar">
+        <div class="toolbar-group toolbar-title">
+          <span class="brand" aria-label="AutoGraph">AutoGraph</span>
+        </div>
+        <div class="toolbar-group">
+          <button id="btn-undo" class="tb-btn" title="Undo (Ctrl+Z)" aria-label="Undo">
+            <span aria-hidden="true">↶</span>
+          </button>
+          <button id="btn-redo" class="tb-btn" title="Redo (Ctrl+Y)" aria-label="Redo">
+            <span aria-hidden="true">↷</span>
+          </button>
+        </div>
+        <div class="toolbar-group">
+          <button id="btn-focus" class="tb-btn" title="Toggle Focus Mode (isolate selected node)" aria-label="Toggle focus mode" aria-pressed="false">
+            <span aria-hidden="true">◎</span>
+            <span class="tb-label">Focus</span>
+          </button>
+          <button id="btn-fit" class="tb-btn" title="Fit graph to view" aria-label="Fit to view">
+            <span aria-hidden="true">⊡</span>
+            <span class="tb-label">Fit</span>
+          </button>
+        </div>
+        <div class="toolbar-group">
+          <button id="btn-save" class="tb-btn" title="Save DOT file" aria-label="Save DOT file">
+            <span aria-hidden="true">⤓</span>
+            <span class="tb-label">Save</span>
+          </button>
+          <button id="btn-load" class="tb-btn" title="Load DOT file" aria-label="Load DOT file">
+            <span aria-hidden="true">⤒</span>
+            <span class="tb-label">Load</span>
+          </button>
+          <input type="file" id="file-input" accept=".dot,.gv,text/vnd.graphviz" hidden />
+        </div>
+        <div class="toolbar-group toolbar-end">
+          <button id="btn-toggle-editor" class="tb-btn" title="Toggle DOT code editor" aria-label="Toggle DOT editor" aria-pressed="false">
+            <span aria-hidden="true">{ }</span>
+            <span class="tb-label">DOT</span>
+          </button>
+        </div>
+      </header>
+
+      <main class="workspace">
+        <section class="canvas-wrap" aria-label="Graph canvas">
+          <div id="graph" class="graph-host"></div>
+          <div id="hint" class="hint">
+            Double-tap empty space to add a node · Drag from a node to create
+            an edge · Double-tap a node or edge to rename
+          </div>
+          <input id="label-edit" class="label-edit" type="text" autocomplete="off" spellcheck="false" />
+        </section>
+        <aside id="editor-pane" class="editor-pane" hidden aria-label="DOT source editor">
+          <div class="editor-header">DOT Source</div>
+          <div id="editor" class="editor-host"></div>
+        </aside>
+      </main>
+
+      <div id="status" class="status" role="status" aria-live="polite"></div>
+    </div>
     <script type="module" src="/src/main.js"></script>
   </body>
 </html>

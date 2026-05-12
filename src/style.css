@@ -94,6 +94,12 @@ main {
 #graph svg {
   width: 100%;
   height: 100%;
+  display: block;
+  cursor: grab;
+}
+
+#graph svg:active {
+  cursor: grabbing;
 }
 
 #inline-rename {

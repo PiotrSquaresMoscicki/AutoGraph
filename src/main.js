@@ -9,6 +9,7 @@ document.querySelector('#app').innerHTML = `
     <span class="header-actions">
       <button id="btn-save" type="button">Save</button>
       <button id="btn-load" type="button">Load</button>
+      <button id="btn-fit" type="button">Fit</button>
       <button id="btn-toggle-dot" type="button">Show DOT</button>
       <input id="file-input" type="file" accept=".dot,.gv,text/vnd.graphviz,text/plain" hidden />
     </span>
@@ -38,6 +39,7 @@ const state = {
   ],
   selected: null, // { type: 'node'|'edge', key: string }
   nextId: 3,
+  viewport: { tx: 0, ty: 0, s: 1 },
 };
 
 const graphEl = document.querySelector('#graph');
@@ -49,6 +51,7 @@ const dragLine = document.querySelector('#drag-line line');
 const dragSvg = document.querySelector('#drag-line');
 const btnSave = document.querySelector('#btn-save');
 const btnLoad = document.querySelector('#btn-load');
+const btnFit = document.querySelector('#btn-fit');
 const btnToggleDot = document.querySelector('#btn-toggle-dot');
 const fileInput = document.querySelector('#file-input');
 const renameInput = document.createElement('input');
@@ -58,11 +61,25 @@ renameInput.id = 'inline-rename';
 renameInput.hidden = true;
 graphPane.appendChild(renameInput);
 
+// ---------- Viewport ----------
+// Persistent SVG canvas that fills the pane; Graphviz content lives inside
+// a <g id="viewport"> so we can pan/zoom by changing its transform attribute.
+const SVG_NS = 'http://www.w3.org/2000/svg';
+const graphSvg = document.createElementNS(SVG_NS, 'svg');
+graphSvg.setAttribute('width', '100%');
+graphSvg.setAttribute('height', '100%');
+const viewportGroup = document.createElementNS(SVG_NS, 'g');
+viewportGroup.id = 'viewport';
+graphSvg.appendChild(viewportGroup);
+graphEl.appendChild(graphSvg);
+
 let viz = null;
 let renderToken = 0;
 let suppressDotSync = false;
 let renameSession = null; // { type: 'node'|'edge', key: string, initialValue: string }
 let pendingRename = null; // { type: 'node'|'edge', key: string }
+let panState = null;      // { startX, startY, startTx, startTy }
+let initialFit = true;    // fit content after the first render
 
 // ---------- History ----------
 const HISTORY_LIMIT = 100;
@@ -82,6 +99,71 @@ function freshNodeId() {
 function edgeKey(e) { return `${e.from}->${e.to}`; }
 function isTextEditingElement(el) {
   return !!(el && (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT' || el.isContentEditable));
+}
+
+// ---------- Viewport helpers ----------
+const ZOOM_MIN = 0.1;
+const ZOOM_MAX = 4;
+
+function applyViewportTransform() {
+  const { tx, ty, s } = state.viewport;
+  viewportGroup.setAttribute('transform', `translate(${tx},${ty}) scale(${s})`);
+}
+
+// Convert pane-local coordinates to world (graph) coordinates.
+function screenToWorld(paneX, paneY) {
+  const { tx, ty, s } = state.viewport;
+  return { x: (paneX - tx) / s, y: (paneY - ty) / s };
+}
+
+// Convert world (graph) coordinates to pane-local screen coordinates.
+function worldToScreen(worldX, worldY) {
+  const { tx, ty, s } = state.viewport;
+  return { x: worldX * s + tx, y: worldY * s + ty };
+}
+
+// Zoom by `factor`, keeping the point (pivotX, pivotY) in pane-local coords fixed.
+function zoomBy(factor, pivotX, pivotY) {
+  const { tx, ty, s } = state.viewport;
+  const newS = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, s * factor));
+  if (newS === s) return;
+  state.viewport.s = newS;
+  state.viewport.tx = pivotX - (pivotX - tx) * (newS / s);
+  state.viewport.ty = pivotY - (pivotY - ty) * (newS / s);
+  applyViewportTransform();
+}
+
+// Fit all graph content into the pane with padding.
+function fitContent() {
+  const paneRect = graphPane.getBoundingClientRect();
+  if (!paneRect.width || !paneRect.height) return;
+  let bbox;
+  try { bbox = viewportGroup.getBBox(); } catch { return; }
+  if (!bbox || !bbox.width || !bbox.height) return;
+  const PAD = 40;
+  const s = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN,
+    Math.min((paneRect.width - PAD * 2) / bbox.width,
+             (paneRect.height - PAD * 2) / bbox.height)));
+  state.viewport.s = s;
+  state.viewport.tx = (paneRect.width - bbox.width * s) / 2 - bbox.x * s;
+  state.viewport.ty = (paneRect.height - bbox.height * s) / 2 - bbox.y * s;
+  applyViewportTransform();
+}
+
+// Reset to 1:1 scale, centering the content.
+function resetViewport() {
+  const paneRect = graphPane.getBoundingClientRect();
+  state.viewport.s = 1;
+  let bbox;
+  try { bbox = viewportGroup.getBBox(); } catch { /* ignore */ }
+  if (bbox && bbox.width) {
+    state.viewport.tx = (paneRect.width - bbox.width) / 2 - bbox.x;
+    state.viewport.ty = (paneRect.height - bbox.height) / 2 - bbox.y;
+  } else {
+    state.viewport.tx = 0;
+    state.viewport.ty = 0;
+  }
+  applyViewportTransform();
 }
 
 function setStatus(msg, isError = false) {
@@ -161,22 +243,30 @@ async function render({ updateDotText = true } = {}) {
   }
   if (token !== renderToken) return;
 
-  graphEl.innerHTML = '';
-  graphEl.appendChild(svgEl);
-  // Let the SVG fill the pane.
-  svgEl.removeAttribute('width');
-  svgEl.removeAttribute('height');
-  svgEl.setAttribute('preserveAspectRatio', 'xMidYMid meet');
+  // Transfer Graphviz SVG children into the persistent viewport group.
+  // The Graphviz SVG element itself is discarded; only its children are used.
+  viewportGroup.innerHTML = '';
+  while (svgEl.firstChild) {
+    viewportGroup.appendChild(svgEl.firstChild);
+  }
+  applyViewportTransform();
 
-  attachGraphInteractions(svgEl);
-  reapplySelection(svgEl);
-  if (renameSession && !positionRenameInput(svgEl, renameSession)) {
+  attachGraphInteractions(graphSvg);
+  reapplySelection(graphSvg);
+  // Close rename editor on re-render (pan/zoom or model change); simpler than
+  // trying to re-anchor it to a potentially moved label.
+  if (renameSession && !positionRenameInput(graphSvg, renameSession)) {
     closeRenameEditor();
   }
   if (!renameSession && pendingRename) {
     const next = pendingRename;
     pendingRename = null;
     openRenameEditor(next.type, next.key);
+  }
+  // Fit content into view on the very first render.
+  if (initialFit) {
+    initialFit = false;
+    requestAnimationFrame(fitContent);
   }
   setStatus(`${state.nodes.length} node(s), ${state.edges.length} edge(s)`);
 }
@@ -222,7 +312,6 @@ let dragState = null; // { fromId, startX, startY }
 // regardless of which element inside the group received the event.
 // Styles are set inline so the hover/selected CSS rules on `.edge path` /
 // `.edge polygon` cannot make the hit area visible.
-const SVG_NS = 'http://www.w3.org/2000/svg';
 const EDGE_HIT_STYLE = 'stroke:transparent;fill:transparent;cursor:pointer;';
 function addEdgeHitArea(edgeGroup) {
   const visiblePath = edgeGroup.querySelector(':scope > path');
@@ -376,10 +465,50 @@ graphPane.addEventListener('touchmove', (ev) => {
   updateDragTo(t.clientX, t.clientY);
 }, { passive: false });
 
-window.addEventListener('mouseup', (ev) => {
-  if (!dragState) return;
-  finishDragAt(ev.clientX, ev.clientY);
+// Pan: mousedown on the SVG background (not on a node/edge) starts a pan.
+// Node/edge mousedown handlers call stopPropagation so they won't trigger this.
+graphSvg.addEventListener('mousedown', (ev) => {
+  if (ev.button !== 0) return;
+  if (dragState) return; // a node drag-to-connect is active
+  ev.preventDefault();
+  panState = {
+    startX: ev.clientX,
+    startY: ev.clientY,
+    startTx: state.viewport.tx,
+    startTy: state.viewport.ty,
+  };
+  graphPane.style.cursor = 'grabbing';
 });
+
+// Pan mousemove on window so panning continues even when cursor leaves the pane.
+window.addEventListener('mousemove', (ev) => {
+  if (!panState) return;
+  state.viewport.tx = panState.startTx + (ev.clientX - panState.startX);
+  state.viewport.ty = panState.startTy + (ev.clientY - panState.startY);
+  applyViewportTransform();
+  if (renameSession) closeRenameEditor();
+});
+
+window.addEventListener('mouseup', (ev) => {
+  if (dragState) finishDragAt(ev.clientX, ev.clientY);
+  if (panState) {
+    panState = null;
+    graphPane.style.cursor = '';
+  }
+});
+
+// Wheel zoom — centered on cursor position.
+// When ctrlKey is set the browser is forwarding a trackpad pinch gesture.
+graphPane.addEventListener('wheel', (ev) => {
+  ev.preventDefault();
+  if (renameSession) closeRenameEditor();
+  const rect = graphPane.getBoundingClientRect();
+  const pivotX = ev.clientX - rect.left;
+  const pivotY = ev.clientY - rect.top;
+  // Pinch (ctrlKey) has smaller deltas; regular scroll has larger ones.
+  const delta = ev.ctrlKey ? ev.deltaY * 0.04 : ev.deltaY * 0.001;
+  zoomBy(Math.exp(-delta), pivotX, pivotY);
+}, { passive: false });
 
 // Touch equivalent of mouseup. The original touch target receives touchend
 // regardless of where the finger lifts, so we rely on document.elementFromPoint
@@ -464,6 +593,24 @@ window.addEventListener('keydown', (ev) => {
     ev.preventDefault();
     if (state.selected.type === 'node') renameNode(state.selected.key);
     else renameEdge(state.selected.key);
+  }
+  // Viewport keyboard shortcuts: +/= zoom in, - zoom out, 0 reset 1:1.
+  if (ev.key === '+' || ev.key === '=') {
+    ev.preventDefault();
+    const r = graphPane.getBoundingClientRect();
+    zoomBy(1.2, r.width / 2, r.height / 2);
+    return;
+  }
+  if (ev.key === '-') {
+    ev.preventDefault();
+    const r = graphPane.getBoundingClientRect();
+    zoomBy(1 / 1.2, r.width / 2, r.height / 2);
+    return;
+  }
+  if (ev.key === '0') {
+    ev.preventDefault();
+    resetViewport();
+    return;
   }
   // Tab: create a connected node and enter rename mode (one undo step).
   // Shift+Tab: same but with reversed edge direction (new → selected).
@@ -632,12 +779,10 @@ function openRenameEditor(type, key) {
   if (renameSession) commitRenameEditor();
   const initialValue = getRenameValue(type, key);
   if (initialValue == null) return;
-  const svgEl = graphEl.querySelector('svg');
-  if (!svgEl) return;
   renameSession = { type, key, initialValue };
   renameInput.value = initialValue;
   renameInput.hidden = false;
-  if (!positionRenameInput(svgEl, renameSession)) {
+  if (!positionRenameInput(graphSvg, renameSession)) {
     closeRenameEditor();
     return;
   }
@@ -706,6 +851,8 @@ btnToggleDot.addEventListener('click', () => {
   setDotPaneVisible(dotPane.hidden);
 });
 
+btnFit.addEventListener('click', fitContent);
+
 applyDotPaneVisibility(isDotPaneVisible());
 
 // ---------- Save / Load ----------
@@ -756,7 +903,8 @@ fileInput.addEventListener('change', async () => {
     // Use the file's base name as the suggested save name.
     state.name = file.name.replace(/\.[^.]+$/, '') || 'graph';
     dotEl.classList.remove('invalid');
-    render();
+    await render();
+    requestAnimationFrame(fitContent);
     setStatus(`Loaded ${file.name}`);
   } catch (err) {
     // Non-blocking error: leave state untouched.

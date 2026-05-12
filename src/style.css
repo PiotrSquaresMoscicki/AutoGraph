@@ -157,10 +157,7 @@ body {
 .canvas-wrap {
   flex: 1 1 auto;
   position: relative;
-  background:
-    radial-gradient(circle at 1px 1px, rgba(255, 255, 255, 0.06) 1px, transparent 0)
-      0 0 / 24px 24px,
-    var(--bg);
+  background: var(--bg);
   overflow: hidden;
   min-width: 0;
   min-height: 0;
@@ -213,6 +210,31 @@ body {
 .graph-host .edge text {
   fill: var(--fg);
   font-family: inherit;
+}
+
+/* Hover highlight (nodes and edges) */
+.graph-host .node:hover ellipse,
+.graph-host .node:hover polygon,
+.graph-host .node:hover path,
+.graph-host .node:hover circle,
+.graph-host .node:hover rect {
+  stroke: var(--accent-strong);
+  stroke-width: 2.5px;
+  filter: drop-shadow(0 0 4px rgba(122, 163, 255, 0.5));
+}
+
+.graph-host .edge {
+  cursor: pointer;
+}
+
+.graph-host .edge:hover path,
+.graph-host .edge:hover polygon {
+  stroke: var(--accent-strong);
+  stroke-width: 2.5px;
+}
+
+.graph-host .edge:hover polygon {
+  fill: var(--accent-strong);
 }
 
 /* Selection highlight */

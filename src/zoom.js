@@ -13,7 +13,7 @@
 
 import * as d3 from 'd3';
 
-export function createZoom({ onZoom, scaleExtent = [0.1, 10] } = {}) {
+export function createZoom({ onZoom, scaleExtent = [0.1, 10], shouldFilter } = {}) {
   const zoom = d3
     .zoom()
     .scaleExtent(scaleExtent)
@@ -21,6 +21,8 @@ export function createZoom({ onZoom, scaleExtent = [0.1, 10] } = {}) {
     // unconditionally (we re-interpret them in the handler) and accept touch
     // / mouse drags except for secondary buttons.
     .filter((event) => {
+      // External veto (e.g., a node drag is in progress).
+      if (shouldFilter && shouldFilter(event) === false) return false;
       if (event.type === 'wheel') return true;
       if (event.type === 'mousedown') {
         // Only primary button for drag-pan; right/middle clicks are reserved
@@ -53,8 +55,13 @@ export function createZoom({ onZoom, scaleExtent = [0.1, 10] } = {}) {
  *
  * Returns a teardown function.
  */
-export function attachWheelPan(selection, zoom, { panSpeed = 1 } = {}) {
+export function attachWheelPan(selection, zoom, { panSpeed = 1, shouldPan } = {}) {
   function onWheel(event) {
+    // External veto (e.g., a node drag is in progress).
+    if (shouldPan && shouldPan(event) === false) {
+      event.preventDefault();
+      return;
+    }
     // Pinch on Mac trackpads arrives with ctrlKey synthesized -> let d3 zoom.
     if (event.ctrlKey || event.metaKey) {
       // Let d3-zoom handle the zoom via its installed listener; do not

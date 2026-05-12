@@ -518,7 +518,7 @@ export function getModel(dot) {
 export function emptyDot() {
   return [
     'digraph G {',
-    '  rankdir=LR;',
+    '  rankdir=TB;',
     '  node [shape=box, style="rounded,filled", fillcolor="#2d2d2d", fontcolor="#f0f0f0", color="#b0b0b0"];',
     '  edge [color="#b0b0b0", fontcolor="#f0f0f0"];',
     '  bgcolor="transparent";',

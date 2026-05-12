@@ -56,6 +56,7 @@ export function createGraph(host, opts) {
   let renderToken = 0;
   let dragState = null;
   let tempEdgeEl = null;
+  let isNodeDragging = false; // suppress viewport pan/zoom during node drag
 
   // ---------- rendering ----------------------------------------------------
 
@@ -102,13 +103,16 @@ export function createGraph(host, opts) {
         // If the floating label editor is open, keep it positioned correctly.
         repositionLabelEditor();
       },
+      shouldFilter: () => !isNodeDragging,
     });
     svgSel.call(zoom);
     svgSel.call(zoom.transform, currentTransform);
     // Disable default dblclick zoom; we use dblclick for "create node".
     svgSel.on('dblclick.zoom', null);
 
-    detachWheel = attachWheelPan(svgSel, zoom);
+    detachWheel = attachWheelPan(svgSel, zoom, {
+      shouldPan: () => !isNodeDragging,
+    });
 
     installInteraction();
     applySelectionHighlight();
@@ -262,6 +266,7 @@ export function createGraph(host, opts) {
           const dy = ev.clientY - startY;
           if (!isDragging && Math.hypot(dx, dy) > 6) {
             isDragging = true;
+            isNodeDragging = true;
             dragState = {
               sourceId,
               sourceEl: nodeEl,
@@ -279,6 +284,7 @@ export function createGraph(host, opts) {
           window.removeEventListener('pointermove', onMove);
           window.removeEventListener('pointerup', onUp);
           window.removeEventListener('pointercancel', onUp);
+          isNodeDragging = false;
           try {
             nodeEl.releasePointerCapture(pointerId);
           } catch (_) {
@@ -403,6 +409,20 @@ export function createGraph(host, opts) {
     }
     const bbox = el.getBoundingClientRect();
     const host = hostSel.node().getBoundingClientRect();
+    // Match the rendered text size of the underlying SVG label so the inline
+    // editor visually replaces the label seamlessly.
+    const textEl = el.querySelector('text');
+    if (textEl) {
+      const cs = window.getComputedStyle(textEl);
+      const fs = parseFloat(cs.fontSize);
+      if (fs && !Number.isNaN(fs)) {
+        editorEl.style.fontSize = fs + 'px';
+      }
+      if (cs.fontFamily) editorEl.style.fontFamily = cs.fontFamily;
+    } else {
+      editorEl.style.fontSize = '';
+      editorEl.style.fontFamily = '';
+    }
     const w = Math.max(80, bbox.width);
     const h = Math.max(28, bbox.height * 0.6);
     editorEl.style.width = w + 'px';

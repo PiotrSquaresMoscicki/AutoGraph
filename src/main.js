@@ -62,6 +62,7 @@ let viz = null;
 let renderToken = 0;
 let suppressDotSync = false;
 let renameSession = null; // { type: 'node'|'edge', key: string, initialValue: string }
+let pendingRename = null; // { type: 'node'|'edge', key: string }
 
 // ---------- Helpers ----------
 function freshNodeId() {
@@ -118,6 +119,11 @@ async function render({ updateDotText = true } = {}) {
   reapplySelection(svgEl);
   if (renameSession && !positionRenameInput(svgEl, renameSession)) {
     closeRenameEditor();
+  }
+  if (!renameSession && pendingRename) {
+    const next = pendingRename;
+    pendingRename = null;
+    openRenameEditor(next.type, next.key);
   }
   setStatus(`${state.nodes.length} node(s), ${state.edges.length} edge(s)`);
 }
@@ -347,7 +353,7 @@ graphPane.addEventListener('click', (ev) => {
 
 graphPane.addEventListener('dblclick', (ev) => {
   if (ev.target.closest('g.node, g.edge')) return;
-  addNode();
+  addNode(undefined, { select: true, rename: true });
 });
 
 renameInput.addEventListener('keydown', (ev) => {
@@ -386,10 +392,12 @@ window.addEventListener('keydown', (ev) => {
 });
 
 // ---------- Model mutations ----------
-function addNode(label) {
+function addNode(label, { select = false, rename = false } = {}) {
   const id = freshNodeId();
   const lbl = label ?? id.toUpperCase();
   state.nodes.push({ id, label: lbl });
+  if (select) state.selected = { type: 'node', key: id };
+  if (rename) pendingRename = { type: 'node', key: id };
   render();
   return id;
 }

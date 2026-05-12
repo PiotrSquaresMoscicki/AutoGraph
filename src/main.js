@@ -168,10 +168,10 @@ const SVG_NS = 'http://www.w3.org/2000/svg';
 const EDGE_HIT_STYLE = 'stroke:transparent;fill:transparent;cursor:pointer;';
 function addEdgeHitArea(edgeGroup) {
   const visiblePath = edgeGroup.querySelector(':scope > path');
-  if (visiblePath) {
+  const d = visiblePath ? visiblePath.getAttribute('d') : null;
+  if (d) {
     const hit = document.createElementNS(SVG_NS, 'path');
-    const d = visiblePath.getAttribute('d');
-    if (d) hit.setAttribute('d', d);
+    hit.setAttribute('d', d);
     hit.setAttribute('stroke-width', '14');
     hit.setAttribute('pointer-events', 'stroke');
     hit.setAttribute('class', 'edge-hit-area');
@@ -179,10 +179,10 @@ function addEdgeHitArea(edgeGroup) {
     edgeGroup.insertBefore(hit, edgeGroup.firstChild);
   }
   const arrowhead = edgeGroup.querySelector(':scope > polygon');
-  if (arrowhead) {
+  const points = arrowhead ? arrowhead.getAttribute('points') : null;
+  if (points) {
     const hit = document.createElementNS(SVG_NS, 'polygon');
-    const points = arrowhead.getAttribute('points');
-    if (points) hit.setAttribute('points', points);
+    hit.setAttribute('points', points);
     hit.setAttribute('stroke-width', '14');
     hit.setAttribute('pointer-events', 'all');
     hit.setAttribute('class', 'edge-hit-area');

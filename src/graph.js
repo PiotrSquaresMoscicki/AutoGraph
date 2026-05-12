@@ -51,6 +51,8 @@ export function createGraph(host, opts) {
   let listenerCleanups = [];
   let lastTapTime = 0;
   let lastTapTarget = null;
+  let lastTapX = 0;
+  let lastTapY = 0;
   let renderToken = 0;
   let dragState = null;
   let tempEdgeEl = null;
@@ -411,8 +413,6 @@ export function createGraph(host, opts) {
 
   // ---------- helpers ------------------------------------------------------
 
-  let lastTapX = 0;
-  let lastTapY = 0;
   function prevTapDistance(event) {
     return Math.hypot(event.clientX - lastTapX, event.clientY - lastTapY);
   }
@@ -448,13 +448,13 @@ export function createGraph(host, opts) {
     const m = parseDot(dot);
     const n = m.nodes.get(id);
     if (!n) return id;
-    return n.attrs.label != null ? String(n.attrs.label) : id;
+    return n.attrs.label !== undefined && n.attrs.label !== null ? String(n.attrs.label) : id;
   }
   function extractEdgeLabel(dot, ends) {
     const m = parseDot(dot);
     const e = m.edges.find((x) => x.source === ends.source && x.target === ends.target);
     if (!e) return '';
-    return e.attrs.label != null ? String(e.attrs.label) : '';
+    return e.attrs.label !== undefined && e.attrs.label !== null ? String(e.attrs.label) : '';
   }
 
   // ---------- temp edge preview during drag --------------------------------

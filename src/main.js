@@ -89,8 +89,9 @@ const editor = createEditor($editorHost, {
   initial: history.current,
   onChange: (text) => {
     if (focusMode) {
-      // Editor edits in focus mode update the focused DOT only.
-      mainDotSnapshot = text; // store as candidate main when leaving focus
+      // Editor edits in focus mode only update the focused view. The original
+      // main DOT (mainDotSnapshot) is preserved untouched until the user
+      // explicitly exits focus mode or commits a UI mutation that propagates.
       history.replaceTop(text);
       render();
       return;
@@ -148,7 +149,7 @@ updateButtons();
 
 $btnUndo.addEventListener('click', () => {
   const dot = history.undo();
-  if (dot != null) {
+  if (dot !== null) {
     editor.setText(dot);
     render();
   }
@@ -156,7 +157,7 @@ $btnUndo.addEventListener('click', () => {
 
 $btnRedo.addEventListener('click', () => {
   const dot = history.redo();
-  if (dot != null) {
+  if (dot !== null) {
     editor.setText(dot);
     render();
   }

@@ -328,7 +328,7 @@ export function parseDot(src) {
 // -----------------------------------------------------------------------------
 
 function needsQuoting(s) {
-  if (s === '' || s == null) return true;
+  if (s === '' || s === null || s === undefined) return true;
   // Allowed unquoted ID (numbers or simple identifiers).
   if (/^[A-Za-z_][A-Za-z_0-9]*$/.test(s)) return false;
   if (/^-?(?:\.\d+|\d+(?:\.\d+)?)$/.test(s)) return false;
@@ -424,7 +424,7 @@ export function setNodeLabel(dot, id, label) {
   return withModel(dot, (m) => {
     if (!m.nodes.has(id)) m.nodes.set(id, { attrs: {} });
     const n = m.nodes.get(id);
-    if (label === '' || label == null) delete n.attrs.label;
+    if (label === '' || label === null || label === undefined) delete n.attrs.label;
     else n.attrs.label = label;
   });
 }
@@ -433,7 +433,7 @@ export function setEdgeLabel(dot, source, target, label) {
   return withModel(dot, (m) => {
     const e = m.edges.find((x) => x.source === source && x.target === target);
     if (!e) return;
-    if (label === '' || label == null) delete e.attrs.label;
+    if (label === '' || label === null || label === undefined) delete e.attrs.label;
     else e.attrs.label = label;
   });
 }

@@ -396,7 +396,8 @@ function addNode(label, { select = false, rename = false } = {}) {
   const id = freshNodeId();
   const lbl = label ?? id.toUpperCase();
   state.nodes.push({ id, label: lbl });
-  if (select || rename) state.selected = { type: 'node', key: id };
+  if (rename) select = true;
+  if (select) state.selected = { type: 'node', key: id };
   if (rename) pendingRename = { type: 'node', key: id };
   render();
   return id;

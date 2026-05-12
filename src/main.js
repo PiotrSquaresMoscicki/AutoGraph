@@ -248,7 +248,7 @@ function finishDragAt(clientX, clientY) {
     clientX >= paneRect.left && clientX <= paneRect.right &&
     clientY >= paneRect.top && clientY <= paneRect.bottom
   ) {
-    const newId = addNode();
+    const newId = addNode(undefined, { select: true, rename: true });
     addEdge(ds.fromId, newId);
   }
 }

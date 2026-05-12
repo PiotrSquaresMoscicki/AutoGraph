@@ -157,6 +157,40 @@ function findEdgeGroup(svgEl, key) {
 // ---------- Interaction wiring ----------
 let dragState = null; // { fromId, startX, startY }
 
+// Add a transparent, wide-stroke overlay over each edge's path (and arrowhead
+// polygon if present) so clicks within ~8 px of the line still select the edge.
+// The overlay is inserted as the first child of the edge group so the visible
+// edge paints on top. The existing click handler on g.edge continues to fire
+// regardless of which element inside the group received the event.
+// Styles are set inline so the hover/selected CSS rules on `.edge path` /
+// `.edge polygon` cannot make the hit area visible.
+const SVG_NS = 'http://www.w3.org/2000/svg';
+const EDGE_HIT_STYLE = 'stroke:transparent;fill:transparent;cursor:pointer;';
+function addEdgeHitArea(edgeGroup) {
+  const visiblePath = edgeGroup.querySelector(':scope > path');
+  if (visiblePath) {
+    const hit = document.createElementNS(SVG_NS, 'path');
+    const d = visiblePath.getAttribute('d');
+    if (d) hit.setAttribute('d', d);
+    hit.setAttribute('stroke-width', '14');
+    hit.setAttribute('pointer-events', 'stroke');
+    hit.setAttribute('class', 'edge-hit-area');
+    hit.setAttribute('style', EDGE_HIT_STYLE);
+    edgeGroup.insertBefore(hit, edgeGroup.firstChild);
+  }
+  const arrowhead = edgeGroup.querySelector(':scope > polygon');
+  if (arrowhead) {
+    const hit = document.createElementNS(SVG_NS, 'polygon');
+    const points = arrowhead.getAttribute('points');
+    if (points) hit.setAttribute('points', points);
+    hit.setAttribute('stroke-width', '14');
+    hit.setAttribute('pointer-events', 'all');
+    hit.setAttribute('class', 'edge-hit-area');
+    hit.setAttribute('style', EDGE_HIT_STYLE);
+    edgeGroup.insertBefore(hit, edgeGroup.firstChild);
+  }
+}
+
 function attachGraphInteractions(svgEl) {
   // Node interactions
   for (const g of svgEl.querySelectorAll('g.node')) {
@@ -193,6 +227,7 @@ function attachGraphInteractions(svgEl) {
   // Edge interactions
   for (const g of svgEl.querySelectorAll('g.edge')) {
     const key = getTitle(g);
+    addEdgeHitArea(g);
     g.addEventListener('click', (ev) => {
       ev.stopPropagation();
       selectEdge(key);

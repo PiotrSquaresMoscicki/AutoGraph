@@ -1,0 +1,75 @@
+name: Deploy to GitHub Pages
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+        env:
+          BASE_URL: /${{ github.event.repository.name }}/
+
+      - name: Generate deployment marker
+        run: |
+          DEPLOY_MARKER="deploy-$(date +%s)-${{ github.sha }}"
+          echo "$DEPLOY_MARKER" > ./dist/.deploy-marker
+          echo "DEPLOY_MARKER=$DEPLOY_MARKER" >> $GITHUB_ENV
+
+      - name: Deploy to GitHub Pages
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./dist
+          keep_files: true
+
+      - name: Wait for deployment to be available
+        run: |
+          DEPLOY_URL="https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/.deploy-marker"
+          echo "Waiting for deployment to be available at: $DEPLOY_URL"
+          echo "Expected marker: $DEPLOY_MARKER"
+          
+          MAX_ATTEMPTS=60
+          ATTEMPT=0
+          
+          while [ $ATTEMPT -lt $MAX_ATTEMPTS ]; do
+            ATTEMPT=$((ATTEMPT + 1))
+            echo "Attempt $ATTEMPT of $MAX_ATTEMPTS..."
+            
+            HTTP_CODE=$(curl -s -o /tmp/response.txt -w "%{http_code}" "$DEPLOY_URL" || echo "000")
+            RESPONSE=$(cat /tmp/response.txt 2>/dev/null || echo "")
+            
+            if [ "$HTTP_CODE" = "200" ] && [ "$RESPONSE" = "$DEPLOY_MARKER" ]; then
+              echo "✅ Deployment verified successfully!"
+              exit 0
+            fi
+            
+            echo "HTTP Status: $HTTP_CODE, Marker not yet available or mismatch. Waiting 5 seconds..."
+            sleep 5
+          done
+          
+          echo "❌ Deployment verification timed out after $MAX_ATTEMPTS attempts"
+          exit 1

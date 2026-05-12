@@ -79,6 +79,7 @@ let suppressDotSync = false;
 let renameSession = null; // { type: 'node'|'edge', key: string, initialValue: string }
 let pendingRename = null; // { type: 'node'|'edge', key: string }
 let panState = null;         // { startX, startY, startTx, startTy }
+let pinchState = null;       // { startDist, startMidX, startMidY, startTx, startTy, startS }
 let needsInitialFit = true; // fit content into view after the first render
 
 // ---------- History ----------
@@ -131,6 +132,13 @@ function zoomBy(factor, pivotX, pivotY) {
   state.viewport.tx = pivotX - (pivotX - tx) * (newS / s);
   state.viewport.ty = pivotY - (pivotY - ty) * (newS / s);
   applyViewportTransform();
+}
+
+// Distance between two touch points (used for pinch-zoom).
+function touchDist(touches) {
+  const dx = touches[0].clientX - touches[1].clientX;
+  const dy = touches[0].clientY - touches[1].clientY;
+  return Math.hypot(dx, dy);
 }
 
 // Fit all graph content into the pane with padding.
@@ -456,15 +464,48 @@ graphPane.addEventListener('mousemove', (ev) => {
   updateDragTo(ev.clientX, ev.clientY);
 });
 
-// Touch equivalent of mousemove. Registered non-passive so we can call
-// preventDefault() while a drag is in progress to stop the page from scrolling
-// or pinch-zooming as the user moves their finger from a node.
+// Touch equivalents of mousemove. Registered non-passive so we can call
+// preventDefault() to suppress scroll/zoom for all three gesture types:
+// node drag-to-connect (dragState), background pan (panState), pinch-zoom (pinchState).
 graphPane.addEventListener('touchmove', (ev) => {
-  if (!dragState) return;
-  if (ev.touches.length !== 1) return;
-  ev.preventDefault();
-  const t = ev.touches[0];
-  updateDragTo(t.clientX, t.clientY);
+  if (dragState) {
+    // Node drag-to-connect: forward to the same handler used for mouse.
+    if (ev.touches.length !== 1) return;
+    ev.preventDefault();
+    const t = ev.touches[0];
+    updateDragTo(t.clientX, t.clientY);
+    return;
+  }
+  if (panState && ev.touches.length >= 1) {
+    // Single-finger background pan.
+    ev.preventDefault();
+    const t = ev.touches[0];
+    state.viewport.tx = panState.startTx + (t.clientX - panState.startX);
+    state.viewport.ty = panState.startTy + (t.clientY - panState.startY);
+    applyViewportTransform();
+    if (renameSession) closeRenameEditor();
+    return;
+  }
+  if (pinchState && ev.touches.length === 2) {
+    // Two-finger pinch-zoom with simultaneous pan (tracked via midpoint).
+    ev.preventDefault();
+    const rect = graphPane.getBoundingClientRect();
+    const currentDist = touchDist(ev.touches);
+    const currentMidX = (ev.touches[0].clientX + ev.touches[1].clientX) / 2 - rect.left;
+    const currentMidY = (ev.touches[0].clientY + ev.touches[1].clientY) / 2 - rect.top;
+    // New scale, clamped.
+    const newS = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN,
+      pinchState.startS * currentDist / pinchState.startDist));
+    // Compute the world point that was under the initial midpoint and keep it
+    // under the current midpoint (handles combined pan + zoom).
+    const wx = (pinchState.startMidX - pinchState.startTx) / pinchState.startS;
+    const wy = (pinchState.startMidY - pinchState.startTy) / pinchState.startS;
+    state.viewport.s = newS;
+    state.viewport.tx = currentMidX - wx * newS;
+    state.viewport.ty = currentMidY - wy * newS;
+    applyViewportTransform();
+    if (renameSession) closeRenameEditor();
+  }
 }, { passive: false });
 
 // Pan: mousedown on the SVG background (not on a node/edge) starts a pan.
@@ -481,6 +522,38 @@ graphSvg.addEventListener('mousedown', (ev) => {
   };
   graphPane.style.cursor = 'grabbing';
 });
+
+// Touch pan and pinch-zoom: touchstart on the SVG background.
+// Node touchstart handlers call stopPropagation, so touches on nodes never
+// reach here — only background touches do.
+graphSvg.addEventListener('touchstart', (ev) => {
+  if (dragState) return; // node drag-to-connect is active
+  ev.preventDefault();
+  const rect = graphPane.getBoundingClientRect();
+  if (ev.touches.length === 1) {
+    // Single finger on background: start pan.
+    pinchState = null;
+    panState = {
+      startX: ev.touches[0].clientX,
+      startY: ev.touches[0].clientY,
+      startTx: state.viewport.tx,
+      startTy: state.viewport.ty,
+    };
+  } else if (ev.touches.length === 2) {
+    // Two fingers: start pinch-zoom (also handles simultaneous pan via midpoint).
+    panState = null;
+    const midX = (ev.touches[0].clientX + ev.touches[1].clientX) / 2 - rect.left;
+    const midY = (ev.touches[0].clientY + ev.touches[1].clientY) / 2 - rect.top;
+    pinchState = {
+      startDist: touchDist(ev.touches),
+      startMidX: midX,
+      startMidY: midY,
+      startTx: state.viewport.tx,
+      startTy: state.viewport.ty,
+      startS: state.viewport.s,
+    };
+  }
+}, { passive: false });
 
 // Pan mousemove on window so panning continues even when cursor leaves the pane.
 window.addEventListener('mousemove', (ev) => {
@@ -513,21 +586,36 @@ graphPane.addEventListener('wheel', (ev) => {
   zoomBy(Math.exp(-delta), pivotX, pivotY);
 }, { passive: false });
 
-// Touch equivalent of mouseup. The original touch target receives touchend
-// regardless of where the finger lifts, so we rely on document.elementFromPoint
-// inside finishDragAt to determine the actual drop target.
+// Touch equivalents of mouseup and touchcancel: end node-drag, pan, or pinch.
 window.addEventListener('touchend', (ev) => {
-  if (!dragState) return;
-  const t = ev.changedTouches[0];
-  if (!t) {
-    cancelDrag();
+  if (dragState) {
+    const t = ev.changedTouches[0];
+    if (!t) { cancelDrag(); } else { finishDragAt(t.clientX, t.clientY); }
+  }
+  // All fingers lifted: clear all states.
+  if (ev.touches.length === 0) {
+    panState = null;
+    pinchState = null;
     return;
   }
-  finishDragAt(t.clientX, t.clientY);
+  // Lifted one finger during a two-finger pinch: transition to single-finger pan
+  // so the remaining finger can continue panning without needing to lift and re-tap.
+  if (pinchState && ev.touches.length === 1) {
+    pinchState = null;
+    panState = {
+      startX: ev.touches[0].clientX,
+      startY: ev.touches[0].clientY,
+      startTx: state.viewport.tx,
+      startTy: state.viewport.ty,
+    };
+  }
 });
 
 window.addEventListener('touchcancel', () => {
+  // cancelDrag() sets dragState = null and hides the drag SVG.
   cancelDrag();
+  panState = null;
+  pinchState = null;
 });
 
 graphPane.addEventListener('click', (ev) => {

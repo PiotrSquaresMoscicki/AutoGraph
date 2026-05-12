@@ -14,7 +14,7 @@ document.querySelector('#app').innerHTML = `
     </span>
   </header>
   <main>
-    <div id="graph-pane">
+    <div id="graph-pane" tabindex="0">
       <div id="graph"></div>
       <svg id="drag-line"><line x1="0" y1="0" x2="0" y2="0" stroke="#3182ce" stroke-width="2" stroke-dasharray="5,4"/></svg>
     </div>
@@ -402,6 +402,7 @@ graphPane.addEventListener('click', (ev) => {
   // Ignore clicks that originated on a node/edge (those stopPropagation already).
   if (ev.target.closest('g.node, g.edge')) return;
   clearSelection();
+  graphPane.focus({ preventScroll: true });
 });
 
 graphPane.addEventListener('dblclick', (ev) => {
@@ -414,12 +415,14 @@ renameInput.addEventListener('keydown', (ev) => {
     ev.preventDefault();
     ev.stopPropagation();
     commitRenameEditor();
+    graphPane.focus({ preventScroll: true });
     return;
   }
   if (ev.key === 'Escape') {
     ev.preventDefault();
     ev.stopPropagation();
     cancelRenameEditor();
+    graphPane.focus({ preventScroll: true });
   }
 });
 
@@ -461,6 +464,20 @@ window.addEventListener('keydown', (ev) => {
     ev.preventDefault();
     if (state.selected.type === 'node') renameNode(state.selected.key);
     else renameEdge(state.selected.key);
+  }
+  // Tab: create a connected node and enter rename mode (one undo step).
+  // Shift+Tab: same but with reversed edge direction (new → selected).
+  // addNode with rename:true sets compositeAction=true so addEdge below
+  // skips its own pushSnapshot — the whole sequence is one undo entry.
+  if (ev.key === 'Tab' && state.selected?.type === 'node' && ae === graphPane) {
+    ev.preventDefault();
+    const fromId = state.selected.key;
+    const newId = addNode(undefined, { select: true, rename: true });
+    if (ev.shiftKey) {
+      addEdge(newId, fromId);
+    } else {
+      addEdge(fromId, newId);
+    }
   }
 });
 
@@ -506,11 +523,13 @@ function renameEdge(key) {
 function selectNode(id) {
   state.selected = { type: 'node', key: id };
   render();
+  graphPane.focus({ preventScroll: true });
 }
 
 function selectEdge(key) {
   state.selected = { type: 'edge', key };
   render();
+  graphPane.focus({ preventScroll: true });
 }
 
 function clearSelection() {

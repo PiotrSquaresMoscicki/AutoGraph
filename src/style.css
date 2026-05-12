@@ -1,101 +1,171 @@
 :root {
-  font-family: system-ui, Avenir, Helvetica, Arial, sans-serif;
-  line-height: 1.5;
-  font-weight: 400;
-
-  color-scheme: light dark;
-  color: rgba(255, 255, 255, 0.87);
-  background-color: #242424;
-
-  font-synthesis: none;
-  text-rendering: optimizeLegibility;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
+  font-family: system-ui, sans-serif;
+  color-scheme: light;
 }
 
-a {
-  font-weight: 500;
-  color: #646cff;
-  text-decoration: inherit;
-}
-a:hover {
-  color: #535bf2;
-}
+* { box-sizing: border-box; }
 
-body {
+html, body {
   margin: 0;
-  display: flex;
-  place-items: center;
-  min-width: 320px;
-  min-height: 100vh;
-}
-
-h1 {
-  font-size: 3.2em;
-  line-height: 1.1;
+  height: 100%;
+  background: #fafafa;
+  color: #222;
 }
 
 #app {
-  max-width: 1280px;
-  margin: 0 auto;
-  padding: 2rem;
-  text-align: center;
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
 }
 
-.logo {
-  height: 6em;
-  padding: 1.5em;
-  will-change: filter;
-  transition: filter 300ms;
-}
-.logo:hover {
-  filter: drop-shadow(0 0 2em #646cffaa);
-}
-.logo.vanilla:hover {
-  filter: drop-shadow(0 0 2em #f7df1eaa);
+header {
+  padding: 8px 12px;
+  background: #2d3748;
+  color: #fff;
+  font-size: 14px;
+  display: flex;
+  gap: 16px;
+  align-items: center;
 }
 
-.card {
-  padding: 2em;
+header h1 {
+  font-size: 16px;
+  margin: 0;
+  font-weight: 600;
 }
 
-.read-the-docs {
-  color: #888;
+header .hint {
+  font-size: 12px;
+  color: #cbd5e0;
 }
 
-.description {
-  font-size: 1.2em;
-  margin: 1em 0;
+main {
+  flex: 1;
+  display: flex;
+  min-height: 0;
 }
 
-button {
-  border-radius: 8px;
-  border: 1px solid transparent;
-  padding: 0.6em 1.2em;
-  font-size: 1em;
-  font-weight: 500;
-  font-family: inherit;
-  background-color: #1a1a1a;
+#graph-pane {
+  flex: 1;
+  position: relative;
+  overflow: hidden;
+  background: #fff;
+  border-right: 1px solid #e2e8f0;
+}
+
+#graph {
+  width: 100%;
+  height: 100%;
+  display: block;
+  user-select: none;
+}
+
+#graph svg {
+  width: 100%;
+  height: 100%;
+}
+
+#dot-pane {
+  width: 360px;
+  display: flex;
+  flex-direction: column;
+  background: #f7fafc;
+}
+
+#dot-pane label {
+  padding: 6px 10px;
+  font-size: 12px;
+  color: #4a5568;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+#dot {
+  flex: 1;
+  border: 0;
+  resize: none;
+  padding: 10px;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 13px;
+  background: #f7fafc;
+  outline: none;
+}
+
+#dot.invalid {
+  background: #fff5f5;
+}
+
+#status {
+  padding: 4px 10px;
+  font-size: 12px;
+  border-top: 1px solid #e2e8f0;
+  color: #4a5568;
+  min-height: 22px;
+  background: #edf2f7;
+}
+
+#status.error { color: #c53030; }
+
+/* Graph element styling (applied to the SVG that viz.js renders) */
+#graph .node ellipse,
+#graph .node polygon,
+#graph .node path,
+#graph .node rect {
+  fill: #fff;
+  stroke: #2d3748;
+  stroke-width: 1.5px;
   cursor: pointer;
-  transition: border-color 0.25s;
-}
-button:hover {
-  border-color: #646cff;
-}
-button:focus,
-button:focus-visible {
-  outline: 4px auto -webkit-focus-ring-color;
+  transition: fill 0.1s, stroke 0.1s;
 }
 
-@media (prefers-color-scheme: light) {
-  :root {
-    color: #213547;
-    background-color: #ffffff;
-  }
-  a:hover {
-    color: #747bff;
-  }
-  button {
-    background-color: #f9f9f9;
-  }
+#graph .node text {
+  pointer-events: none;
+  fill: #1a202c;
+}
+
+#graph .node:hover ellipse,
+#graph .node:hover polygon,
+#graph .node:hover path,
+#graph .node:hover rect {
+  fill: #ebf8ff;
+  stroke: #3182ce;
+}
+
+#graph .node.selected ellipse,
+#graph .node.selected polygon,
+#graph .node.selected path,
+#graph .node.selected rect {
+  fill: #bee3f8;
+  stroke: #2b6cb0;
+  stroke-width: 2.5px;
+}
+
+#graph .edge path,
+#graph .edge polygon {
+  stroke: #4a5568;
+  cursor: pointer;
+  transition: stroke 0.1s;
+}
+#graph .edge polygon { fill: #4a5568; }
+
+#graph .edge:hover path,
+#graph .edge:hover polygon {
+  stroke: #3182ce;
+}
+#graph .edge:hover polygon { fill: #3182ce; }
+
+#graph .edge.selected path,
+#graph .edge.selected polygon {
+  stroke: #2b6cb0;
+  stroke-width: 2.5px;
+}
+#graph .edge.selected polygon { fill: #2b6cb0; }
+
+/* Temporary line shown while dragging from a node */
+#drag-line {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
 }

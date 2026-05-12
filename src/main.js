@@ -9,6 +9,7 @@ document.querySelector('#app').innerHTML = `
     <span class="header-actions">
       <button id="btn-save" type="button">Save</button>
       <button id="btn-load" type="button">Load</button>
+      <button id="btn-fit" type="button">Fit</button>
       <button id="btn-toggle-dot" type="button">Show DOT</button>
       <input id="file-input" type="file" accept=".dot,.gv,text/vnd.graphviz,text/plain" hidden />
     </span>
@@ -38,6 +39,7 @@ const state = {
   ],
   selected: null, // { type: 'node'|'edge', key: string }
   nextId: 3,
+  viewport: { tx: 0, ty: 0, s: 1 },
 };
 
 const graphEl = document.querySelector('#graph');
@@ -49,6 +51,7 @@ const dragLine = document.querySelector('#drag-line line');
 const dragSvg = document.querySelector('#drag-line');
 const btnSave = document.querySelector('#btn-save');
 const btnLoad = document.querySelector('#btn-load');
+const btnFit = document.querySelector('#btn-fit');
 const btnToggleDot = document.querySelector('#btn-toggle-dot');
 const fileInput = document.querySelector('#file-input');
 const renameInput = document.createElement('input');
@@ -58,11 +61,31 @@ renameInput.id = 'inline-rename';
 renameInput.hidden = true;
 graphPane.appendChild(renameInput);
 
+// ---------- Viewport ----------
+// Persistent SVG canvas that fills the pane; Graphviz content lives inside
+// a <g id="viewport"> so we can pan/zoom by changing its transform attribute.
+const SVG_NS = 'http://www.w3.org/2000/svg';
+const graphSvg = document.createElementNS(SVG_NS, 'svg');
+graphSvg.setAttribute('width', '100%');
+graphSvg.setAttribute('height', '100%');
+const viewportGroup = document.createElementNS(SVG_NS, 'g');
+viewportGroup.id = 'viewport';
+graphSvg.appendChild(viewportGroup);
+graphEl.appendChild(graphSvg);
+
 let viz = null;
 let renderToken = 0;
 let suppressDotSync = false;
 let renameSession = null; // { type: 'node'|'edge', key: string, initialValue: string }
 let pendingRename = null; // { type: 'node'|'edge', key: string }
+let panState = null;         // { startX, startY, startTx, startTy }
+let pinchState = null;       // { startDist, startMidX, startMidY, startTx, startTy, startS }
+// Double-tap detection for touch devices (browser won't synthesise dblclick when
+// touch-action:none is set).  Tracks the most recent single-finger background tap.
+let lastBackgroundTap = null; // { x, y, time } | null
+const DOUBLE_TAP_MS = 300;   // max ms between taps to count as double-tap
+const DOUBLE_TAP_PX = 30;    // max movement (px) for a touch to count as a tap
+let needsInitialFit = true; // fit content into view after the first render
 
 // ---------- History ----------
 const HISTORY_LIMIT = 100;
@@ -82,6 +105,78 @@ function freshNodeId() {
 function edgeKey(e) { return `${e.from}->${e.to}`; }
 function isTextEditingElement(el) {
   return !!(el && (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT' || el.isContentEditable));
+}
+
+// ---------- Viewport helpers ----------
+const ZOOM_MIN = 0.1;
+const ZOOM_MAX = 4;
+
+function applyViewportTransform() {
+  const { tx, ty, s } = state.viewport;
+  viewportGroup.setAttribute('transform', `translate(${tx},${ty}) scale(${s})`);
+}
+
+// Convert pane-local coordinates to world (graph) coordinates.
+function screenToWorld(paneX, paneY) {
+  const { tx, ty, s } = state.viewport;
+  return { x: (paneX - tx) / s, y: (paneY - ty) / s };
+}
+
+// Convert world (graph) coordinates to pane-local screen coordinates.
+function worldToScreen(worldX, worldY) {
+  const { tx, ty, s } = state.viewport;
+  return { x: worldX * s + tx, y: worldY * s + ty };
+}
+
+// Zoom by `factor`, keeping the point (pivotX, pivotY) in pane-local coords fixed.
+function zoomBy(factor, pivotX, pivotY) {
+  const { tx, ty, s } = state.viewport;
+  const newS = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, s * factor));
+  if (newS === s) return;
+  state.viewport.s = newS;
+  state.viewport.tx = pivotX - (pivotX - tx) * (newS / s);
+  state.viewport.ty = pivotY - (pivotY - ty) * (newS / s);
+  applyViewportTransform();
+}
+
+// Distance between two touch points (used for pinch-zoom).
+function touchDist(touches) {
+  const dx = touches[0].clientX - touches[1].clientX;
+  const dy = touches[0].clientY - touches[1].clientY;
+  return Math.hypot(dx, dy);
+}
+
+// Fit all graph content into the pane with padding.
+function fitContent() {
+  const paneRect = graphPane.getBoundingClientRect();
+  if (!paneRect.width || !paneRect.height) return;
+  let bbox;
+  try { bbox = viewportGroup.getBBox(); } catch { return; }
+  if (!bbox || !bbox.width || !bbox.height) return;
+  const PAD = 40;
+  const s = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN,
+    Math.min((paneRect.width - PAD * 2) / bbox.width,
+             (paneRect.height - PAD * 2) / bbox.height)));
+  state.viewport.s = s;
+  state.viewport.tx = (paneRect.width - bbox.width * s) / 2 - bbox.x * s;
+  state.viewport.ty = (paneRect.height - bbox.height * s) / 2 - bbox.y * s;
+  applyViewportTransform();
+}
+
+// Reset to 1:1 scale, centering the content.
+function resetViewport() {
+  const paneRect = graphPane.getBoundingClientRect();
+  state.viewport.s = 1;
+  let bbox;
+  try { bbox = viewportGroup.getBBox(); } catch { /* ignore */ }
+  if (bbox && bbox.width) {
+    state.viewport.tx = (paneRect.width - bbox.width) / 2 - bbox.x;
+    state.viewport.ty = (paneRect.height - bbox.height) / 2 - bbox.y;
+  } else {
+    state.viewport.tx = 0;
+    state.viewport.ty = 0;
+  }
+  applyViewportTransform();
 }
 
 function setStatus(msg, isError = false) {
@@ -161,22 +256,32 @@ async function render({ updateDotText = true } = {}) {
   }
   if (token !== renderToken) return;
 
-  graphEl.innerHTML = '';
-  graphEl.appendChild(svgEl);
-  // Let the SVG fill the pane.
-  svgEl.removeAttribute('width');
-  svgEl.removeAttribute('height');
-  svgEl.setAttribute('preserveAspectRatio', 'xMidYMid meet');
+  // Transfer Graphviz SVG children into the persistent viewport group.
+  // The Graphviz SVG element itself is discarded; only its children are used.
+  viewportGroup.innerHTML = '';
+  while (svgEl.firstChild) {
+    viewportGroup.appendChild(svgEl.firstChild);
+  }
+  applyViewportTransform();
 
-  attachGraphInteractions(svgEl);
-  reapplySelection(svgEl);
-  if (renameSession && !positionRenameInput(svgEl, renameSession)) {
+  attachGraphInteractions(graphSvg);
+  reapplySelection(graphSvg);
+  // On re-render try to reposition the rename input over its label. If the
+  // label can no longer be found (e.g. the renamed element was deleted) close
+  // the editor. Note: pan/zoom does not trigger a re-render; those code paths
+  // close the editor directly in their event handlers.
+  if (renameSession && !positionRenameInput(graphSvg, renameSession)) {
     closeRenameEditor();
   }
   if (!renameSession && pendingRename) {
     const next = pendingRename;
     pendingRename = null;
     openRenameEditor(next.type, next.key);
+  }
+  // Fit content into view on the very first render.
+  if (needsInitialFit) {
+    needsInitialFit = false;
+    requestAnimationFrame(fitContent);
   }
   setStatus(`${state.nodes.length} node(s), ${state.edges.length} edge(s)`);
 }
@@ -222,7 +327,6 @@ let dragState = null; // { fromId, startX, startY }
 // regardless of which element inside the group received the event.
 // Styles are set inline so the hover/selected CSS rules on `.edge path` /
 // `.edge polygon` cannot make the hit area visible.
-const SVG_NS = 'http://www.w3.org/2000/svg';
 const EDGE_HIT_STYLE = 'stroke:transparent;fill:transparent;cursor:pointer;';
 function addEdgeHitArea(edgeGroup) {
   const visiblePath = edgeGroup.querySelector(':scope > path');
@@ -365,37 +469,190 @@ graphPane.addEventListener('mousemove', (ev) => {
   updateDragTo(ev.clientX, ev.clientY);
 });
 
-// Touch equivalent of mousemove. Registered non-passive so we can call
-// preventDefault() while a drag is in progress to stop the page from scrolling
-// or pinch-zooming as the user moves their finger from a node.
+// Touch equivalents of mousemove. Registered non-passive so we can call
+// preventDefault() to suppress scroll/zoom for all three gesture types:
+// node drag-to-connect (dragState), background pan (panState), pinch-zoom (pinchState).
 graphPane.addEventListener('touchmove', (ev) => {
-  if (!dragState) return;
-  if (ev.touches.length !== 1) return;
-  ev.preventDefault();
-  const t = ev.touches[0];
-  updateDragTo(t.clientX, t.clientY);
-}, { passive: false });
-
-window.addEventListener('mouseup', (ev) => {
-  if (!dragState) return;
-  finishDragAt(ev.clientX, ev.clientY);
-});
-
-// Touch equivalent of mouseup. The original touch target receives touchend
-// regardless of where the finger lifts, so we rely on document.elementFromPoint
-// inside finishDragAt to determine the actual drop target.
-window.addEventListener('touchend', (ev) => {
-  if (!dragState) return;
-  const t = ev.changedTouches[0];
-  if (!t) {
-    cancelDrag();
+  if (dragState) {
+    // Node drag-to-connect: forward to the same handler used for mouse.
+    if (ev.touches.length !== 1) return;
+    ev.preventDefault();
+    const t = ev.touches[0];
+    updateDragTo(t.clientX, t.clientY);
     return;
   }
-  finishDragAt(t.clientX, t.clientY);
+  if (panState && ev.touches.length >= 1) {
+    // Single-finger background pan.
+    ev.preventDefault();
+    const t = ev.touches[0];
+    state.viewport.tx = panState.startTx + (t.clientX - panState.startX);
+    state.viewport.ty = panState.startTy + (t.clientY - panState.startY);
+    applyViewportTransform();
+    if (renameSession) closeRenameEditor();
+    return;
+  }
+  if (pinchState && ev.touches.length === 2) {
+    // Two-finger pinch-zoom with simultaneous pan (tracked via midpoint).
+    ev.preventDefault();
+    const rect = graphPane.getBoundingClientRect();
+    const currentDist = touchDist(ev.touches);
+    const currentMidX = (ev.touches[0].clientX + ev.touches[1].clientX) / 2 - rect.left;
+    const currentMidY = (ev.touches[0].clientY + ev.touches[1].clientY) / 2 - rect.top;
+    // New scale, clamped.
+    const newS = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN,
+      pinchState.startS * currentDist / pinchState.startDist));
+    // Compute the world point that was under the initial midpoint and keep it
+    // under the current midpoint (handles combined pan + zoom).
+    const wx = (pinchState.startMidX - pinchState.startTx) / pinchState.startS;
+    const wy = (pinchState.startMidY - pinchState.startTy) / pinchState.startS;
+    state.viewport.s = newS;
+    state.viewport.tx = currentMidX - wx * newS;
+    state.viewport.ty = currentMidY - wy * newS;
+    applyViewportTransform();
+    if (renameSession) closeRenameEditor();
+  }
+}, { passive: false });
+
+// Pan: mousedown on the SVG background (not on a node/edge) starts a pan.
+// Node/edge mousedown handlers call stopPropagation so they won't trigger this.
+graphSvg.addEventListener('mousedown', (ev) => {
+  if (ev.button !== 0) return;
+  if (dragState) return; // a node drag-to-connect is active
+  ev.preventDefault();
+  panState = {
+    startX: ev.clientX,
+    startY: ev.clientY,
+    startTx: state.viewport.tx,
+    startTy: state.viewport.ty,
+  };
+  graphPane.style.cursor = 'grabbing';
+});
+
+// Touch pan and pinch-zoom: touchstart on the SVG background.
+// Node touchstart handlers call stopPropagation, so touches on nodes never
+// reach here — only background touches do.
+graphSvg.addEventListener('touchstart', (ev) => {
+  if (dragState) return; // node drag-to-connect is active
+  ev.preventDefault();
+  const rect = graphPane.getBoundingClientRect();
+  if (ev.touches.length === 1) {
+    // Single finger on background: start pan.
+    pinchState = null;
+    panState = {
+      startX: ev.touches[0].clientX,
+      startY: ev.touches[0].clientY,
+      startTx: state.viewport.tx,
+      startTy: state.viewport.ty,
+    };
+  } else if (ev.touches.length === 2) {
+    // Two fingers: start pinch-zoom (also handles simultaneous pan via midpoint).
+    // A multi-finger gesture is never a tap, so discard any pending double-tap.
+    lastBackgroundTap = null;
+    panState = null;
+    const midX = (ev.touches[0].clientX + ev.touches[1].clientX) / 2 - rect.left;
+    const midY = (ev.touches[0].clientY + ev.touches[1].clientY) / 2 - rect.top;
+    pinchState = {
+      startDist: touchDist(ev.touches),
+      startMidX: midX,
+      startMidY: midY,
+      startTx: state.viewport.tx,
+      startTy: state.viewport.ty,
+      startS: state.viewport.s,
+    };
+  }
+}, { passive: false });
+
+// Pan mousemove on window so panning continues even when cursor leaves the pane.
+window.addEventListener('mousemove', (ev) => {
+  if (!panState) return;
+  state.viewport.tx = panState.startTx + (ev.clientX - panState.startX);
+  state.viewport.ty = panState.startTy + (ev.clientY - panState.startY);
+  applyViewportTransform();
+  if (renameSession) closeRenameEditor();
+});
+
+window.addEventListener('mouseup', (ev) => {
+  if (dragState) finishDragAt(ev.clientX, ev.clientY);
+  if (panState) {
+    panState = null;
+    graphPane.style.cursor = '';
+  }
+});
+
+// Wheel zoom — centered on cursor position.
+// When ctrlKey is set the browser is forwarding a trackpad pinch gesture.
+graphPane.addEventListener('wheel', (ev) => {
+  ev.preventDefault();
+  if (renameSession) closeRenameEditor();
+  const rect = graphPane.getBoundingClientRect();
+  const pivotX = ev.clientX - rect.left;
+  const pivotY = ev.clientY - rect.top;
+  // Pinch (ctrlKey) sends much smaller deltaY values than a mouse wheel; the
+  // larger multiplier (0.04 vs 0.001) compensates so both feel similarly paced.
+  const delta = ev.ctrlKey ? ev.deltaY * 0.04 : ev.deltaY * 0.001;
+  zoomBy(Math.exp(-delta), pivotX, pivotY);
+}, { passive: false });
+
+// Touch equivalents of mouseup and touchcancel: end node-drag, pan, or pinch.
+window.addEventListener('touchend', (ev) => {
+  if (dragState) {
+    const t = ev.changedTouches[0];
+    if (!t) { cancelDrag(); } else { finishDragAt(t.clientX, t.clientY); }
+  }
+  // All fingers lifted: clear all states, then check for double-tap.
+  if (ev.touches.length === 0) {
+    const savedPan = panState;
+    const wasPinch = pinchState !== null;
+    panState = null;
+    pinchState = null;
+
+    // Double-tap detection (browser won't fire dblclick when touch-action:none).
+    // A candidate tap: single-finger background touch that barely moved.
+    const tapTouch = ev.changedTouches[0];
+    if (savedPan && !wasPinch && tapTouch) {
+      const moved = Math.hypot(tapTouch.clientX - savedPan.startX, tapTouch.clientY - savedPan.startY);
+      if (moved <= DOUBLE_TAP_PX) {
+        const now = Date.now();
+        if (lastBackgroundTap) {
+          const dt = now - lastBackgroundTap.time;
+          const dist = Math.hypot(tapTouch.clientX - lastBackgroundTap.x, tapTouch.clientY - lastBackgroundTap.y);
+          if (dt <= DOUBLE_TAP_MS && dist <= DOUBLE_TAP_PX) {
+            // Second tap close to the first: treat as double-tap → add node.
+            lastBackgroundTap = null;
+            addNode(undefined, { select: true, rename: true });
+            return;
+          }
+        }
+        // First tap (or too far/too slow from previous): record it.
+        lastBackgroundTap = { x: tapTouch.clientX, y: tapTouch.clientY, time: now };
+      } else {
+        // Finger moved — it was a pan, not a tap. Cancel double-tap sequence.
+        lastBackgroundTap = null;
+      }
+    } else if (wasPinch) {
+      // A pinch gesture resets double-tap tracking.
+      lastBackgroundTap = null;
+    }
+    return;
+  }
+  // Lifted one finger during a two-finger pinch: transition to single-finger pan
+  // so the remaining finger can continue panning without needing to lift and re-tap.
+  if (pinchState && ev.touches.length === 1) {
+    pinchState = null;
+    panState = {
+      startX: ev.touches[0].clientX,
+      startY: ev.touches[0].clientY,
+      startTx: state.viewport.tx,
+      startTy: state.viewport.ty,
+    };
+  }
 });
 
 window.addEventListener('touchcancel', () => {
+  // cancelDrag() sets dragState = null and hides the drag SVG.
   cancelDrag();
+  panState = null;
+  pinchState = null;
 });
 
 graphPane.addEventListener('click', (ev) => {
@@ -464,6 +721,24 @@ window.addEventListener('keydown', (ev) => {
     ev.preventDefault();
     if (state.selected.type === 'node') renameNode(state.selected.key);
     else renameEdge(state.selected.key);
+  }
+  // Viewport keyboard shortcuts: +/= zoom in, - zoom out, 0 reset 1:1.
+  if (ev.key === '+' || ev.key === '=') {
+    ev.preventDefault();
+    const r = graphPane.getBoundingClientRect();
+    zoomBy(1.2, r.width / 2, r.height / 2);
+    return;
+  }
+  if (ev.key === '-') {
+    ev.preventDefault();
+    const r = graphPane.getBoundingClientRect();
+    zoomBy(1 / 1.2, r.width / 2, r.height / 2);
+    return;
+  }
+  if (ev.key === '0') {
+    ev.preventDefault();
+    resetViewport();
+    return;
   }
   // Tab: create a connected node and enter rename mode (one undo step).
   // Shift+Tab: same but with reversed edge direction (new → selected).
@@ -632,12 +907,10 @@ function openRenameEditor(type, key) {
   if (renameSession) commitRenameEditor();
   const initialValue = getRenameValue(type, key);
   if (initialValue == null) return;
-  const svgEl = graphEl.querySelector('svg');
-  if (!svgEl) return;
   renameSession = { type, key, initialValue };
   renameInput.value = initialValue;
   renameInput.hidden = false;
-  if (!positionRenameInput(svgEl, renameSession)) {
+  if (!positionRenameInput(graphSvg, renameSession)) {
     closeRenameEditor();
     return;
   }
@@ -706,6 +979,8 @@ btnToggleDot.addEventListener('click', () => {
   setDotPaneVisible(dotPane.hidden);
 });
 
+btnFit.addEventListener('click', fitContent);
+
 applyDotPaneVisibility(isDotPaneVisible());
 
 // ---------- Save / Load ----------
@@ -756,7 +1031,8 @@ fileInput.addEventListener('change', async () => {
     // Use the file's base name as the suggested save name.
     state.name = file.name.replace(/\.[^.]+$/, '') || 'graph';
     dotEl.classList.remove('invalid');
-    render();
+    await render();
+    requestAnimationFrame(fitContent);
     setStatus(`Loaded ${file.name}`);
   } catch (err) {
     // Non-blocking error: leave state untouched.

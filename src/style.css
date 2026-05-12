@@ -96,6 +96,9 @@ main {
   height: 100%;
   display: block;
   cursor: grab;
+  /* Prevent the browser from capturing touch gestures (pan, pinch-zoom) on
+     the SVG background so our own handlers always receive them first. */
+  touch-action: none;
 }
 
 #graph svg:active {

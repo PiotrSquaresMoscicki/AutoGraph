@@ -34,29 +34,12 @@ header h1 {
   font-weight: 600;
 }
 
-header .hint {
-  font-size: 12px;
-  color: #cbd5e0;
-}
-
 header .header-actions {
   margin-left: auto;
   display: flex;
   gap: 6px;
   align-items: center;
 }
-
-#header-status {
-  font-size: 12px;
-  color: #cbd5e0;
-  margin-right: 6px;
-  max-width: 40ch;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-#header-status.error { color: #feb2b2; }
 
 header .header-actions button {
   background: #4a5568;

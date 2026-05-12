@@ -6,15 +6,7 @@ import { serialize, parse } from './dot.js';
 document.querySelector('#app').innerHTML = `
   <header>
     <h1>AutoGraph</h1>
-    <span class="hint">
-      double-click empty space: new node &middot;
-      drag from a node: connect (and create) &middot;
-      double-click node/edge: rename &middot;
-      click: select &middot;
-      Delete: remove
-    </span>
     <span class="header-actions">
-      <span id="header-status" role="status" aria-live="polite"></span>
       <button id="btn-save" type="button">Save</button>
       <button id="btn-load" type="button">Load</button>
       <button id="btn-toggle-dot" type="button">Show DOT</button>
@@ -53,7 +45,6 @@ const graphPane = document.querySelector('#graph-pane');
 const dotPane = document.querySelector('#dot-pane');
 const dotEl = document.querySelector('#dot');
 const statusEl = document.querySelector('#status');
-const headerStatusEl = document.querySelector('#header-status');
 const dragLine = document.querySelector('#drag-line line');
 const dragSvg = document.querySelector('#drag-line');
 const btnSave = document.querySelector('#btn-save');
@@ -77,10 +68,6 @@ function edgeKey(e) { return `${e.from}->${e.to}`; }
 function setStatus(msg, isError = false) {
   statusEl.textContent = msg || '';
   statusEl.classList.toggle('error', !!isError);
-  if (headerStatusEl) {
-    headerStatusEl.textContent = msg || '';
-    headerStatusEl.classList.toggle('error', !!isError);
-  }
 }
 
 // ---------- Rendering ----------

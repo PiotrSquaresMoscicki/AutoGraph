@@ -113,6 +113,9 @@ function isTextEditingElement(el) {
   return !!(el && (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT' || el.isContentEditable));
 }
 function selectionRef(type, key) { return `${type}:${key}`; }
+function isGraphElementTarget(target) {
+  return !!target?.closest?.('g.node, g.edge');
+}
 function parseSelectionRef(ref) {
   const i = ref.indexOf(':');
   if (i < 0) return null;
@@ -504,6 +507,8 @@ function finishMarquee() {
   const ms = marqueeState;
   marqueeState = null;
   marqueeSvg.style.display = 'none';
+  // After a drag-select, the browser will still fire a background click; suppress
+  // it so it does not immediately clear/replace the marquee selection.
   if (ms.moved) suppressNextBackgroundClick = true;
   const w0 = screenToWorld(ms.x, ms.y);
   const w1 = screenToWorld(ms.x + ms.width, ms.y + ms.height);
@@ -519,7 +524,11 @@ function finishMarquee() {
     const id = getTitle(g);
     if (!id) continue;
     let bbox;
-    try { bbox = g.getBBox(); } catch { continue; }
+    try { bbox = g.getBBox(); } catch {
+      // Ignore transient SVG geometry errors and skip this node in marquee hit-test.
+      // Intentionally no logging here to avoid high-volume console noise while dragging.
+      continue;
+    }
     if (boxesIntersect(bbox, worldRect)) {
       selectedNodes.add(id);
       next.add(selectionRef('node', id));
@@ -641,7 +650,7 @@ graphPane.addEventListener('touchmove', (ev) => {
 graphSvg.addEventListener('mousedown', (ev) => {
   if (ev.button !== 0) return;
   if (dragState) return; // a node drag-to-connect is active
-  if (ev.target.closest('g.node, g.edge')) return;
+  if (isGraphElementTarget(ev.target)) return;
   ev.preventDefault();
   if (ev.shiftKey) {
     beginMarquee(ev.clientX, ev.clientY, ev.ctrlKey || ev.metaKey);
@@ -711,7 +720,6 @@ window.addEventListener('mouseup', (ev) => {
     panState = null;
     graphPane.style.cursor = '';
   }
-  if (!panState && !marqueeState) graphPane.style.cursor = '';
 });
 
 // Wheel zoom — centered on cursor position.
@@ -792,7 +800,7 @@ window.addEventListener('touchcancel', () => {
 
 graphPane.addEventListener('click', (ev) => {
   // Ignore clicks that originated on a node/edge (those stopPropagation already).
-  if (ev.target.closest('g.node, g.edge')) return;
+  if (isGraphElementTarget(ev.target)) return;
   if (suppressNextBackgroundClick) {
     suppressNextBackgroundClick = false;
     return;
@@ -802,7 +810,7 @@ graphPane.addEventListener('click', (ev) => {
 });
 
 graphPane.addEventListener('dblclick', (ev) => {
-  if (ev.target.closest('g.node, g.edge')) return;
+  if (isGraphElementTarget(ev.target)) return;
   addNode(undefined, { select: true, rename: true });
 });
 

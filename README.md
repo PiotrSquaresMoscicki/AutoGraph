@@ -64,7 +64,7 @@ The header exposes the main file actions and the DOT pane toggle:
 - Double-click empty space — create a new node.
 - Drag from a node — start an edge; drop on another node to connect, or on empty space to create and connect a new node.
 - Click a node or edge — select it.
-- Double-click a node or edge — rename its label.
+- Double-click a node or edge — rename its label inline (`Enter` commits, `Esc` cancels, blur commits).
 
 ### Touch
 
@@ -74,6 +74,8 @@ node, drag, and lift on another node (or on empty space) to create an edge.
 ### Keyboard
 
 - **Delete** / **Backspace** — remove the current selection (ignored while editing text fields).
+- **F2** — rename the currently selected node or edge.
+- **Enter** — rename the currently selected node or edge.
 
 ## Project Structure
 

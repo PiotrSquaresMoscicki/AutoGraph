@@ -69,6 +69,9 @@ const HISTORY_LIMIT = 100;
 const undoStack = [];
 const redoStack = [];
 let dotDebounceTimer = null;
+// When true, addEdge and commitRenameEditor skip pushSnapshot so that
+// the create-node + create-edge + rename sequence is a single undo step.
+let compositeAction = false;
 
 // ---------- Helpers ----------
 function freshNodeId() {
@@ -469,7 +472,12 @@ function addNode(label, { select = false, rename = false } = {}) {
   state.nodes.push({ id, label: lbl });
   const shouldSelect = select || rename;
   if (shouldSelect) state.selected = { type: 'node', key: id };
-  if (rename) pendingRename = { type: 'node', key: id };
+  if (rename) {
+    pendingRename = { type: 'node', key: id };
+    // Mark a composite transaction: the following addEdge (if any) and
+    // commitRenameEditor belong to the same undo step as this addNode.
+    compositeAction = true;
+  }
   render();
   return id;
 }
@@ -480,7 +488,7 @@ function addEdge(from, to) {
     render();
     return;
   }
-  pushSnapshot();
+  if (!compositeAction) pushSnapshot();
   state.edges.push({ from, to, label: '' });
   render();
 }
@@ -569,6 +577,7 @@ function closeRenameEditor() {
 }
 
 function cancelRenameEditor() {
+  compositeAction = false;
   closeRenameEditor();
 }
 
@@ -576,18 +585,20 @@ function commitRenameEditor() {
   if (!renameSession) return;
   const session = renameSession;
   const next = renameInput.value;
+  const wasComposite = compositeAction;
+  compositeAction = false;
   closeRenameEditor();
   if (next === '') return;
   if (session.type === 'node') {
     const node = state.nodes.find((n) => n.id === session.key);
     if (!node || node.label === next) return;
-    pushSnapshot();
+    if (!wasComposite) pushSnapshot();
     node.label = next;
   } else {
     const [from, to] = session.key.split('->');
     const edge = state.edges.find((e) => e.from === from && e.to === to);
     if (!edge || (edge.label ?? '') === next) return;
-    pushSnapshot();
+    if (!wasComposite) pushSnapshot();
     edge.label = next;
   }
   render();

@@ -78,8 +78,8 @@ let renderToken = 0;
 let suppressDotSync = false;
 let renameSession = null; // { type: 'node'|'edge', key: string, initialValue: string }
 let pendingRename = null; // { type: 'node'|'edge', key: string }
-let panState = null;      // { startX, startY, startTx, startTy }
-let initialFit = true;    // fit content after the first render
+let panState = null;         // { startX, startY, startTx, startTy }
+let needsInitialFit = true; // fit content into view after the first render
 
 // ---------- History ----------
 const HISTORY_LIMIT = 100;
@@ -253,8 +253,10 @@ async function render({ updateDotText = true } = {}) {
 
   attachGraphInteractions(graphSvg);
   reapplySelection(graphSvg);
-  // Close rename editor on re-render (pan/zoom or model change); simpler than
-  // trying to re-anchor it to a potentially moved label.
+  // On re-render try to reposition the rename input over its label. If the
+  // label can no longer be found (e.g. the renamed element was deleted) close
+  // the editor. Note: pan/zoom does not trigger a re-render; those code paths
+  // close the editor directly in their event handlers.
   if (renameSession && !positionRenameInput(graphSvg, renameSession)) {
     closeRenameEditor();
   }
@@ -264,8 +266,8 @@ async function render({ updateDotText = true } = {}) {
     openRenameEditor(next.type, next.key);
   }
   // Fit content into view on the very first render.
-  if (initialFit) {
-    initialFit = false;
+  if (needsInitialFit) {
+    needsInitialFit = false;
     requestAnimationFrame(fitContent);
   }
   setStatus(`${state.nodes.length} node(s), ${state.edges.length} edge(s)`);
@@ -505,7 +507,8 @@ graphPane.addEventListener('wheel', (ev) => {
   const rect = graphPane.getBoundingClientRect();
   const pivotX = ev.clientX - rect.left;
   const pivotY = ev.clientY - rect.top;
-  // Pinch (ctrlKey) has smaller deltas; regular scroll has larger ones.
+  // Pinch (ctrlKey) sends much smaller deltaY values than a mouse wheel; the
+  // larger multiplier (0.04 vs 0.001) compensates so both feel similarly paced.
   const delta = ev.ctrlKey ? ev.deltaY * 0.04 : ev.deltaY * 0.001;
   zoomBy(Math.exp(-delta), pivotX, pivotY);
 }, { passive: false });

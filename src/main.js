@@ -51,11 +51,17 @@ const btnSave = document.querySelector('#btn-save');
 const btnLoad = document.querySelector('#btn-load');
 const btnToggleDot = document.querySelector('#btn-toggle-dot');
 const fileInput = document.querySelector('#file-input');
+const renameInput = document.createElement('input');
 dragSvg.style.display = 'none';
+renameInput.type = 'text';
+renameInput.id = 'inline-rename';
+renameInput.hidden = true;
+graphPane.appendChild(renameInput);
 
 let viz = null;
 let renderToken = 0;
 let suppressDotSync = false;
+let renameSession = null; // { type: 'node'|'edge', key: string, initialValue: string }
 
 // ---------- Helpers ----------
 function freshNodeId() {
@@ -64,6 +70,9 @@ function freshNodeId() {
 }
 
 function edgeKey(e) { return `${e.from}->${e.to}`; }
+function isTextEditingElement(el) {
+  return !!(el && (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT' || el.isContentEditable));
+}
 
 function setStatus(msg, isError = false) {
   statusEl.textContent = msg || '';
@@ -107,6 +116,9 @@ async function render({ updateDotText = true } = {}) {
 
   attachGraphInteractions(svgEl);
   reapplySelection(svgEl);
+  if (renameSession && !positionRenameInput(svgEl, renameSession)) {
+    closeRenameEditor();
+  }
   setStatus(`${state.nodes.length} node(s), ${state.edges.length} edge(s)`);
 }
 
@@ -338,15 +350,39 @@ graphPane.addEventListener('dblclick', (ev) => {
   addNode();
 });
 
-// Keyboard: delete selection.
+renameInput.addEventListener('keydown', (ev) => {
+  if (ev.key === 'Enter') {
+    ev.preventDefault();
+    ev.stopPropagation();
+    commitRenameEditor();
+    return;
+  }
+  if (ev.key === 'Escape') {
+    ev.preventDefault();
+    ev.stopPropagation();
+    cancelRenameEditor();
+  }
+});
+
+renameInput.addEventListener('blur', () => {
+  if (!renameSession) return;
+  commitRenameEditor();
+});
+
+// Keyboard: delete selection + rename shortcuts.
 window.addEventListener('keydown', (ev) => {
-  if (ev.key !== 'Delete' && ev.key !== 'Backspace') return;
-  // Don't hijack edits in the DOT textarea or rename prompts.
   const ae = document.activeElement;
-  if (ae && (ae.tagName === 'TEXTAREA' || ae.tagName === 'INPUT')) return;
-  if (!state.selected) return;
-  ev.preventDefault();
-  deleteSelection();
+  if (isTextEditingElement(ae)) return;
+  if ((ev.key === 'Delete' || ev.key === 'Backspace') && state.selected) {
+    ev.preventDefault();
+    deleteSelection();
+    return;
+  }
+  if ((ev.key === 'F2' || ev.key === 'Enter') && state.selected) {
+    ev.preventDefault();
+    if (state.selected.type === 'node') renameNode(state.selected.key);
+    else renameEdge(state.selected.key);
+  }
 });
 
 // ---------- Model mutations ----------
@@ -369,22 +405,11 @@ function addEdge(from, to) {
 }
 
 function renameNode(id) {
-  const node = state.nodes.find((n) => n.id === id);
-  if (!node) return;
-  const next = window.prompt('Rename node label:', node.label);
-  if (next == null) return;
-  node.label = next;
-  render();
+  openRenameEditor('node', id);
 }
 
 function renameEdge(key) {
-  const [from, to] = key.split('->');
-  const edge = state.edges.find((e) => e.from === from && e.to === to);
-  if (!edge) return;
-  const next = window.prompt('Edge label:', edge.label ?? '');
-  if (next == null) return;
-  edge.label = next;
-  render();
+  openRenameEditor('edge', key);
 }
 
 function selectNode(id) {
@@ -417,6 +442,88 @@ function deleteSelection() {
   }
   state.selected = null;
   render();
+}
+
+function getRenameValue(type, key) {
+  if (type === 'node') {
+    const node = state.nodes.find((n) => n.id === key);
+    return node ? node.label : null;
+  }
+  const [from, to] = key.split('->');
+  const edge = state.edges.find((e) => e.from === from && e.to === to);
+  return edge ? (edge.label ?? '') : null;
+}
+
+function findRenameAnchorRect(svgEl, type, key) {
+  const group = type === 'node' ? findNodeGroup(svgEl, key) : findEdgeGroup(svgEl, key);
+  if (!group) return null;
+  const label = group.querySelector('text');
+  if (label) return label.getBoundingClientRect();
+  if (type === 'edge') {
+    const path = group.querySelector(':scope > path');
+    if (path) return path.getBoundingClientRect();
+  }
+  return group.getBoundingClientRect();
+}
+
+function positionRenameInput(svgEl, session) {
+  const anchorRect = findRenameAnchorRect(svgEl, session.type, session.key);
+  if (!anchorRect) return false;
+  const paneRect = graphPane.getBoundingClientRect();
+  const width = Math.max(72, Math.round(anchorRect.width + 16));
+  const height = Math.max(24, Math.round(anchorRect.height + 8));
+  const left = Math.round(anchorRect.left - paneRect.left + (anchorRect.width - width) / 2);
+  const top = Math.round(anchorRect.top - paneRect.top + (anchorRect.height - height) / 2);
+  renameInput.style.left = `${Math.max(0, left)}px`;
+  renameInput.style.top = `${Math.max(0, top)}px`;
+  renameInput.style.width = `${width}px`;
+  renameInput.style.height = `${height}px`;
+  return true;
+}
+
+function closeRenameEditor() {
+  renameSession = null;
+  renameInput.hidden = true;
+}
+
+function cancelRenameEditor() {
+  closeRenameEditor();
+}
+
+function commitRenameEditor() {
+  if (!renameSession) return;
+  const session = renameSession;
+  const next = renameInput.value;
+  closeRenameEditor();
+  if (next === '') return;
+  if (session.type === 'node') {
+    const node = state.nodes.find((n) => n.id === session.key);
+    if (!node || node.label === next) return;
+    node.label = next;
+  } else {
+    const [from, to] = session.key.split('->');
+    const edge = state.edges.find((e) => e.from === from && e.to === to);
+    if (!edge || (edge.label ?? '') === next) return;
+    edge.label = next;
+  }
+  render();
+}
+
+function openRenameEditor(type, key) {
+  if (renameSession) commitRenameEditor();
+  const initialValue = getRenameValue(type, key);
+  if (initialValue == null) return;
+  const svgEl = graphEl.querySelector('svg');
+  if (!svgEl) return;
+  renameSession = { type, key, initialValue };
+  renameInput.value = initialValue;
+  renameInput.hidden = false;
+  if (!positionRenameInput(svgEl, renameSession)) {
+    closeRenameEditor();
+    return;
+  }
+  renameInput.focus();
+  renameInput.select();
 }
 
 // ---------- DOT textarea: edits drive the model ----------

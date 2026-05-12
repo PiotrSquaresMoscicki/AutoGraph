@@ -92,6 +92,24 @@ main {
   height: 100%;
 }
 
+#inline-rename {
+  position: absolute;
+  z-index: 10;
+  margin: 0;
+  padding: 2px 6px;
+  border: 1px solid #2b6cb0;
+  border-radius: 3px;
+  font: inherit;
+  font-size: 14px;
+  line-height: 1.2;
+  color: #1a202c;
+  background: #fff;
+}
+
+#inline-rename[hidden] {
+  display: none;
+}
+
 #dot-pane {
   width: 360px;
   display: flex;

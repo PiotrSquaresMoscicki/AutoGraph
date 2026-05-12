@@ -13,6 +13,13 @@ document.querySelector('#app').innerHTML = `
       click: select &middot;
       Delete: remove
     </span>
+    <span class="header-actions">
+      <span id="header-status" role="status" aria-live="polite"></span>
+      <button id="btn-save" type="button">Save</button>
+      <button id="btn-load" type="button">Load</button>
+      <button id="btn-toggle-dot" type="button">Show DOT</button>
+      <input id="file-input" type="file" accept=".dot,.gv,text/vnd.graphviz,text/plain" hidden />
+    </span>
   </header>
   <main>
     <div id="graph-pane">
@@ -29,6 +36,7 @@ document.querySelector('#app').innerHTML = `
 
 // ---------- State ----------
 const state = {
+  name: 'graph',
   nodes: [
     { id: 'a', label: 'A' },
     { id: 'b', label: 'B' },
@@ -42,10 +50,16 @@ const state = {
 
 const graphEl = document.querySelector('#graph');
 const graphPane = document.querySelector('#graph-pane');
+const dotPane = document.querySelector('#dot-pane');
 const dotEl = document.querySelector('#dot');
 const statusEl = document.querySelector('#status');
+const headerStatusEl = document.querySelector('#header-status');
 const dragLine = document.querySelector('#drag-line line');
 const dragSvg = document.querySelector('#drag-line');
+const btnSave = document.querySelector('#btn-save');
+const btnLoad = document.querySelector('#btn-load');
+const btnToggleDot = document.querySelector('#btn-toggle-dot');
+const fileInput = document.querySelector('#file-input');
 dragSvg.style.display = 'none';
 
 let viz = null;
@@ -63,6 +77,10 @@ function edgeKey(e) { return `${e.from}->${e.to}`; }
 function setStatus(msg, isError = false) {
   statusEl.textContent = msg || '';
   statusEl.classList.toggle('error', !!isError);
+  if (headerStatusEl) {
+    headerStatusEl.textContent = msg || '';
+    headerStatusEl.classList.toggle('error', !!isError);
+  }
 }
 
 // ---------- Rendering ----------
@@ -345,6 +363,93 @@ dotEl.addEventListener('input', () => {
   } catch (err) {
     dotEl.classList.add('invalid');
     setStatus(err.message, true);
+  }
+});
+
+// ---------- DOT pane visibility (persisted) ----------
+const DOT_PANE_STORAGE_KEY = 'autograph.dotPane.visible';
+
+function isDotPaneVisible() {
+  try {
+    return window.localStorage.getItem(DOT_PANE_STORAGE_KEY) === 'true';
+  } catch {
+    return false;
+  }
+}
+
+function applyDotPaneVisibility(visible) {
+  dotPane.hidden = !visible;
+  btnToggleDot.textContent = visible ? 'Hide DOT' : 'Show DOT';
+  btnToggleDot.setAttribute('aria-pressed', visible ? 'true' : 'false');
+}
+
+function setDotPaneVisible(visible) {
+  applyDotPaneVisibility(visible);
+  try {
+    window.localStorage.setItem(DOT_PANE_STORAGE_KEY, visible ? 'true' : 'false');
+  } catch {
+    // ignore quota / disabled storage
+  }
+}
+
+btnToggleDot.addEventListener('click', () => {
+  setDotPaneVisible(dotPane.hidden);
+});
+
+applyDotPaneVisibility(isDotPaneVisible());
+
+// ---------- Save / Load ----------
+function sanitizeFilename(name) {
+  const cleaned = String(name || '')
+    .replace(/[\\/:*?"<>|\x00-\x1f]/g, '')
+    .replace(/\s+/g, '_')
+    .replace(/^\.+/, '')
+    .trim();
+  return cleaned || 'graph';
+}
+
+btnSave.addEventListener('click', () => {
+  const text = serialize(state);
+  const base = sanitizeFilename(state.name);
+  const filename = `${base}.dot`;
+  const blob = new Blob([text], { type: 'text/vnd.graphviz' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  // Revoke after a brief delay so the browser has time to start the download.
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  setStatus(`Saved ${filename}`);
+});
+
+btnLoad.addEventListener('click', () => {
+  // Reset so selecting the same file again still triggers change.
+  fileInput.value = '';
+  fileInput.click();
+});
+
+fileInput.addEventListener('change', async () => {
+  const file = fileInput.files && fileInput.files[0];
+  if (!file) return;
+  try {
+    const text = await file.text();
+    const parsed = parse(text); // throws on malformed DOT
+    state.nodes = parsed.nodes;
+    state.edges = parsed.edges;
+    state.selected = null;
+    // Reset nextId to avoid colliding with imported ids like n1, n2, ...
+    state.nextId = 1;
+    // Use the file's base name as the suggested save name.
+    state.name = file.name.replace(/\.[^.]+$/, '') || 'graph';
+    dotEl.classList.remove('invalid');
+    render();
+    setStatus(`Loaded ${file.name}`);
+  } catch (err) {
+    // Non-blocking error: leave state untouched.
+    setStatus(`Failed to load ${file.name}: ${err.message}`, true);
   }
 });
 

@@ -1,5 +1,9 @@
 import './style.css';
-import { instance as vizInstance } from '@viz-js/viz';
+import { select as d3select } from 'd3-selection';
+import { transition as d3transition } from 'd3-transition';
+// Side-effect import: extends d3-selection's selection prototype with
+// .graphviz(), used below on d3select(graphEl).
+import 'd3-graphviz';
 import { serialize, parse } from './dot.js';
 
 // ---------- Layout ----------
@@ -66,18 +70,57 @@ renameInput.hidden = true;
 graphPane.appendChild(renameInput);
 
 // ---------- Viewport ----------
-// Persistent SVG canvas that fills the pane; Graphviz content lives inside
-// a <g id="viewport"> so we can pan/zoom by changing its transform attribute.
+// d3-graphviz manages its own <svg> inside #graph. We pan/zoom by manipulating
+// the SVG's viewBox attribute, leaving Graphviz's intrinsic transform on the
+// root <g id="graph0"> alone. This way d3-transition's tweening of element
+// transforms during render transitions does not conflict with our viewport.
+// The attributer below ensures the SVG sizing and viewBox match our viewport
+// state on every render, including during animated transitions.
 const SVG_NS = 'http://www.w3.org/2000/svg';
-const graphSvg = document.createElementNS(SVG_NS, 'svg');
-graphSvg.setAttribute('width', '100%');
-graphSvg.setAttribute('height', '100%');
-const viewportGroup = document.createElementNS(SVG_NS, 'g');
-viewportGroup.id = 'viewport';
-graphSvg.appendChild(viewportGroup);
-graphEl.appendChild(graphSvg);
 
-let viz = null;
+function viewBoxForState() {
+  const pr = graphPane.getBoundingClientRect();
+  const { tx, ty, s } = state.viewport;
+  // Choose vx,vy,vw,vh so that world coords map to pane pixels via
+  //   screen_x = world_x * s + tx   (same math as the old viewport transform).
+  // SVG: screen_x = (world_x - vx) / vw * paneW, with width = paneW pixels.
+  // → vw = paneW / s, vx = -tx / s (same for y).
+  const safeS = s || 1;
+  return {
+    width: pr.width,
+    height: pr.height,
+    viewBox: `${-tx / safeS} ${-ty / safeS} ${pr.width / safeS} ${pr.height / safeS}`,
+  };
+}
+
+function graphAttributer(datum) {
+  if (datum.tag === 'svg') {
+    const vb = viewBoxForState();
+    datum.attributes.width = vb.width;
+    datum.attributes.height = vb.height;
+    datum.attributes.viewBox = vb.viewBox;
+    // Avoid Graphviz's default preserveAspectRatio="xMidYMid meet" centering,
+    // which would shift content unpredictably while we drive the viewBox.
+    datum.attributes.preserveAspectRatio = 'xMinYMin meet';
+  }
+}
+
+const graphvizRenderer = d3select(graphEl)
+  .graphviz({ useWorker: false })
+  .zoom(false)
+  .attributer(graphAttributer);
+
+// Returns the d3-graphviz-managed <svg> element (or null before first render).
+function currentGraphSvg() {
+  return graphEl.querySelector('svg');
+}
+
+// Returns the root <g class="graph"> (i.e. <g id="graph0">) or null.
+function currentGraphRootG() {
+  const svg = currentGraphSvg();
+  return svg ? svg.querySelector(':scope > g.graph') : null;
+}
+
 let renderToken = 0;
 let suppressDotSync = false;
 let renameSession = null; // { type: 'node'|'edge', key: string, initialValue: string }
@@ -155,8 +198,12 @@ const ZOOM_MIN = 0.1;
 const ZOOM_MAX = 4;
 
 function applyViewportTransform() {
-  const { tx, ty, s } = state.viewport;
-  viewportGroup.setAttribute('transform', `translate(${tx},${ty}) scale(${s})`);
+  const svg = currentGraphSvg();
+  if (!svg) return;
+  const vb = viewBoxForState();
+  svg.setAttribute('width', vb.width);
+  svg.setAttribute('height', vb.height);
+  svg.setAttribute('viewBox', vb.viewBox);
 }
 
 // Convert pane-local coordinates to world (graph) coordinates.
@@ -189,12 +236,42 @@ function touchDist(touches) {
   return Math.hypot(dx, dy);
 }
 
+// Returns the bounding box of the rendered content in pane (= SVG userspace)
+// coordinates with our viewport transform stripped, or null if not available.
+// Equivalent to the old viewportGroup.getBBox() in the previous architecture.
+function getContentBBoxInPane() {
+  const g0 = currentGraphRootG();
+  if (!g0) return null;
+  const saved = { tx: state.viewport.tx, ty: state.viewport.ty, s: state.viewport.s };
+  state.viewport.tx = 0;
+  state.viewport.ty = 0;
+  state.viewport.s = 1;
+  applyViewportTransform();
+  let bbox = null;
+  try {
+    const cr = g0.getBoundingClientRect();
+    const pr = graphPane.getBoundingClientRect();
+    if (cr.width && cr.height) {
+      bbox = {
+        x: cr.left - pr.left,
+        y: cr.top - pr.top,
+        width: cr.width,
+        height: cr.height,
+      };
+    }
+  } catch { /* ignore */ }
+  state.viewport.tx = saved.tx;
+  state.viewport.ty = saved.ty;
+  state.viewport.s = saved.s;
+  applyViewportTransform();
+  return bbox;
+}
+
 // Fit all graph content into the pane with padding.
 function fitContent() {
   const paneRect = graphPane.getBoundingClientRect();
   if (!paneRect.width || !paneRect.height) return;
-  let bbox;
-  try { bbox = viewportGroup.getBBox(); } catch { return; }
+  const bbox = getContentBBoxInPane();
   if (!bbox || !bbox.width || !bbox.height) return;
   const PAD = 40;
   const s = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN,
@@ -210,8 +287,7 @@ function fitContent() {
 function resetViewport() {
   const paneRect = graphPane.getBoundingClientRect();
   state.viewport.s = 1;
-  let bbox;
-  try { bbox = viewportGroup.getBBox(); } catch { /* ignore */ }
+  const bbox = getContentBBoxInPane();
   if (bbox && bbox.width) {
     state.viewport.tx = (paneRect.width - bbox.width) / 2 - bbox.x;
     state.viewport.ty = (paneRect.height - bbox.height) / 2 - bbox.y;
@@ -272,10 +348,14 @@ function redo() {
 }
 
 // ---------- Rendering ----------
-async function ensureViz() {
-  if (!viz) viz = await vizInstance();
-  return viz;
-}
+// d3-graphviz animates transitions between successive renders by morphing
+// SVG element attributes/shapes via d3 transitions.
+const RENDER_TRANSITION_MS = 400;
+// Serializes render() calls so that overlapping invocations (which the rest of
+// the app commonly fires when several state mutations land close together) do
+// not interleave inside d3-graphviz's data-join, which can otherwise see a
+// stale DOM (e.g. our injected edge hit-areas) and throw on undefined data.
+let pendingRender = Promise.resolve();
 
 async function render({ updateDotText = true } = {}) {
   const token = ++renderToken;
@@ -288,45 +368,73 @@ async function render({ updateDotText = true } = {}) {
     dotEl.classList.remove('invalid');
   }
 
-  let svgEl;
+  // Wait for any in-flight render to finish before mutating the SVG so that
+  // d3-graphviz never sees a half-transitioned DOM with our hit-area overlays.
+  const prev = pendingRender;
+  let resolveThis;
+  pendingRender = new Promise((res) => { resolveThis = res; });
   try {
-    const v = await ensureViz();
-    if (token !== renderToken) return; // a newer render started
-    svgEl = v.renderSVGElement(dot);
+    await prev;
+  } catch { /* swallow earlier errors so subsequent renders still run */ }
+  // If a newer render has been queued behind us, skip this one entirely; the
+  // most recent dot is what we want to render.
+  if (token !== renderToken) { resolveThis(); return; }
+
+  // Strip our injected edge hit-area overlays before re-rendering so
+  // d3-graphviz's data-join (keyed by datum) does not encounter children
+  // without bound data.
+  removeEdgeHitAreas();
+
+  try {
+    await new Promise((resolve, reject) => {
+      graphvizRenderer
+        .transition(() => d3transition().duration(RENDER_TRANSITION_MS))
+        .onerror((err) => reject(err))
+        // 'renderEnd' fires after the DOM diff but before the animated
+        // transition completes. We attach interactions early on 'renderEnd' so
+        // listeners are wired up promptly, but defer the final viewport-fit
+        // until 'end' (post-transition), because d3-transition keeps writing
+        // tweened attribute values onto the SVG (e.g. viewBox) for the whole
+        // transition duration and would clobber any manual setAttribute we do
+        // mid-transition.
+        .on('renderEnd', () => {
+          if (token !== renderToken) return;
+          const svgEl = currentGraphSvg();
+          if (!svgEl) return;
+          attachGraphInteractions(svgEl);
+          reapplySelection(svgEl);
+          if (renameSession && !positionRenameInput(svgEl, renameSession)) {
+            closeRenameEditor();
+          }
+          if (!renameSession && pendingRename) {
+            const next = pendingRename;
+            pendingRename = null;
+            openRenameEditor(next.type, next.key);
+          }
+        })
+        .on('end', () => resolve())
+        .renderDot(dot);
+    });
   } catch (err) {
-    setStatus(`Render error: ${err.message}`, true);
+    setStatus(`Render error: ${err && err.message ? err.message : err}`, true);
+    resolveThis();
     return;
   }
-  if (token !== renderToken) return;
+  if (token !== renderToken) { resolveThis(); return; } // a newer render started
 
-  // Transfer Graphviz SVG children into the persistent viewport group.
-  // The Graphviz SVG element itself is discarded; only its children are used.
-  viewportGroup.innerHTML = '';
-  while (svgEl.firstChild) {
-    viewportGroup.appendChild(svgEl.firstChild);
-  }
+  const svgEl = currentGraphSvg();
+  if (!svgEl) { resolveThis(); return; }
+
+  // After the transition fully ends, settle the SVG to the current viewport
+  // (in case state.viewport changed while the transition was running).
   applyViewportTransform();
-
-  attachGraphInteractions(graphSvg);
-  reapplySelection(graphSvg);
-  // On re-render try to reposition the rename input over its label. If the
-  // label can no longer be found (e.g. the renamed element was deleted) close
-  // the editor. Note: pan/zoom does not trigger a re-render; those code paths
-  // close the editor directly in their event handlers.
-  if (renameSession && !positionRenameInput(graphSvg, renameSession)) {
-    closeRenameEditor();
-  }
-  if (!renameSession && pendingRename) {
-    const next = pendingRename;
-    pendingRename = null;
-    openRenameEditor(next.type, next.key);
-  }
   // Fit content into view on the very first render.
   if (needsInitialFit) {
     needsInitialFit = false;
     requestAnimationFrame(fitContent);
   }
   setStatus(`${state.nodes.length} node(s), ${state.edges.length} edge(s)`);
+  resolveThis();
 }
 
 function reapplySelection(svgEl) {
@@ -374,8 +482,21 @@ let dragState = null; // { fromId, startX, startY }
 // regardless of which element inside the group received the event.
 // Styles are set inline so the hover/selected CSS rules on `.edge path` /
 // `.edge polygon` cannot make the hit area visible.
+// Removes any previously injected edge hit-area overlays so d3-graphviz's
+// data-join can iterate edge group children without tripping over elements
+// that have no bound datum.
+function removeEdgeHitAreas() {
+  const svg = currentGraphSvg();
+  if (!svg) return;
+  for (const el of svg.querySelectorAll('.edge-hit-area')) {
+    el.remove();
+  }
+}
+
 const EDGE_HIT_STYLE = 'stroke:transparent;fill:transparent;cursor:pointer;';
 function addEdgeHitArea(edgeGroup) {
+  // d3-graphviz reuses DOM elements across renders, so make insertion idempotent.
+  if (edgeGroup.querySelector(':scope > .edge-hit-area')) return;
   const visiblePath = edgeGroup.querySelector(':scope > path');
   const d = visiblePath ? visiblePath.getAttribute('d') : null;
   if (d) {
@@ -510,28 +631,33 @@ function finishMarquee() {
   // After a drag-select, the browser will still fire a background click; suppress
   // it so it does not immediately clear/replace the marquee selection.
   if (ms.moved) suppressNextBackgroundClick = true;
-  const w0 = screenToWorld(ms.x, ms.y);
-  const w1 = screenToWorld(ms.x + ms.width, ms.y + ms.height);
-  const worldRect = {
-    x: Math.min(w0.x, w1.x),
-    y: Math.min(w0.y, w1.y),
-    width: Math.abs(w1.x - w0.x),
-    height: Math.abs(w1.y - w0.y),
-  };
+  // With d3-graphviz, content groups are reused across renders (keyed by their
+  // <title>), so the marquee iterates the live SVG and hit-tests each node's
+  // on-screen bounding box against the marquee rectangle (both in pane coords).
+  const screenRect = { x: ms.x, y: ms.y, width: ms.width, height: ms.height };
+  const paneRect = graphPane.getBoundingClientRect();
   const selectedNodes = new Set();
   const next = ms.additive ? new Set(state.selected) : new Set();
-  for (const g of graphSvg.querySelectorAll('g.node')) {
-    const id = getTitle(g);
-    if (!id) continue;
-    let bbox;
-    try { bbox = g.getBBox(); } catch {
-      // Ignore transient SVG geometry errors and skip this node in marquee hit-test.
-      // Intentionally no logging here to avoid high-volume console noise while dragging.
-      continue;
-    }
-    if (boxesIntersect(bbox, worldRect)) {
-      selectedNodes.add(id);
-      next.add(selectionRef('node', id));
+  const svgEl = currentGraphSvg();
+  if (svgEl) {
+    for (const g of svgEl.querySelectorAll('g.node')) {
+      const id = getTitle(g);
+      if (!id) continue;
+      let cr;
+      try { cr = g.getBoundingClientRect(); } catch {
+        // Ignore transient SVG geometry errors and skip this node in marquee hit-test.
+        continue;
+      }
+      const nodeBox = {
+        x: cr.left - paneRect.left,
+        y: cr.top - paneRect.top,
+        width: cr.width,
+        height: cr.height,
+      };
+      if (boxesIntersect(nodeBox, screenRect)) {
+        selectedNodes.add(id);
+        next.add(selectionRef('node', id));
+      }
     }
   }
   // Marquee edge rule: select edges only when both endpoint nodes are selected
@@ -547,8 +673,13 @@ function finishMarquee() {
 }
 
 function attachGraphInteractions(svgEl) {
+  // d3-graphviz keeps DOM elements alive across renders (matched by <title>
+  // key), so we tag elements with __autograph_bound to avoid attaching the same
+  // listeners multiple times. New nodes/edges from a render get fresh listeners.
   // Node interactions
   for (const g of svgEl.querySelectorAll('g.node')) {
+    if (g.__autograph_bound) continue;
+    g.__autograph_bound = true;
     const id = getTitle(g);
 
     g.addEventListener('mousedown', (ev) => {
@@ -580,8 +711,12 @@ function attachGraphInteractions(svgEl) {
 
   // Edge interactions
   for (const g of svgEl.querySelectorAll('g.edge')) {
-    const key = getTitle(g);
+    // addEdgeHitArea is idempotent and must run every render because
+    // d3-graphviz may strip our injected hit-area overlay when diffing.
     addEdgeHitArea(g);
+    if (g.__autograph_bound) continue;
+    g.__autograph_bound = true;
+    const key = getTitle(g);
     g.addEventListener('click', (ev) => {
       ev.stopPropagation();
       if (ev.ctrlKey || ev.metaKey) selectEdge(key, { toggle: true });
@@ -647,10 +782,15 @@ graphPane.addEventListener('touchmove', (ev) => {
 
 // Pan: mousedown on the SVG background (not on a node/edge) starts a pan.
 // Node/edge mousedown handlers call stopPropagation so they won't trigger this.
-graphSvg.addEventListener('mousedown', (ev) => {
+// Listen on graphPane since the d3-graphviz <svg> is created lazily and may be
+// replaced; overlays inside the pane have pointer-events:none so they don't
+// receive these events.
+graphPane.addEventListener('mousedown', (ev) => {
   if (ev.button !== 0) return;
   if (dragState) return; // a node drag-to-connect is active
   if (isGraphElementTarget(ev.target)) return;
+  // Ignore mousedown on non-graph UI inside the pane (e.g. the rename input).
+  if (!ev.target.closest('#graph')) return;
   ev.preventDefault();
   if (ev.shiftKey) {
     beginMarquee(ev.clientX, ev.clientY, ev.ctrlKey || ev.metaKey);
@@ -668,9 +808,11 @@ graphSvg.addEventListener('mousedown', (ev) => {
 
 // Touch pan and pinch-zoom: touchstart on the SVG background.
 // Node touchstart handlers call stopPropagation, so touches on nodes never
-// reach here — only background touches do.
-graphSvg.addEventListener('touchstart', (ev) => {
+// reach here — only background touches do. Bound to graphPane (delegation)
+// because the d3-graphviz <svg> element is created on first render.
+graphPane.addEventListener('touchstart', (ev) => {
   if (dragState) return; // node drag-to-connect is active
+  if (!ev.target.closest('#graph')) return;
   ev.preventDefault();
   const rect = graphPane.getBoundingClientRect();
   if (ev.touches.length === 1) {
@@ -1063,7 +1205,8 @@ function openRenameEditor(type, key) {
   renameSession = { type, key, initialValue };
   renameInput.value = initialValue;
   renameInput.hidden = false;
-  if (!positionRenameInput(graphSvg, renameSession)) {
+  const svgEl = currentGraphSvg();
+  if (!svgEl || !positionRenameInput(svgEl, renameSession)) {
     closeRenameEditor();
     return;
   }

@@ -474,8 +474,10 @@ function addNode(label, { select = false, rename = false } = {}) {
   if (shouldSelect) state.selected = { type: 'node', key: id };
   if (rename) {
     pendingRename = { type: 'node', key: id };
-    // Mark a composite transaction: the following addEdge (if any) and
-    // commitRenameEditor belong to the same undo step as this addNode.
+    // Mark a composite transaction: the following addEdge (triggered by
+    // finishDragAt after dropping on empty space) and commitRenameEditor
+    // both belong to the same undo step as this addNode, so they skip
+    // their own pushSnapshot calls.
     compositeAction = true;
   }
   render();
@@ -577,6 +579,9 @@ function closeRenameEditor() {
 }
 
 function cancelRenameEditor() {
+  // Clear the composite flag. No snapshot is needed here: the snapshot pushed
+  // by addNode already covers the entire composite (node + any auto-edge),
+  // so Ctrl+Z will undo all of it in one step.
   compositeAction = false;
   closeRenameEditor();
 }

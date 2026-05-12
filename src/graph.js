@@ -413,12 +413,12 @@ export function createGraph(host, opts) {
     // editor visually replaces the label seamlessly.
     const textEl = el.querySelector('text');
     if (textEl) {
-      const cs = window.getComputedStyle(textEl);
-      const fs = parseFloat(cs.fontSize);
-      if (fs && !Number.isNaN(fs)) {
-        editorEl.style.fontSize = fs + 'px';
+      const computedStyle = window.getComputedStyle(textEl);
+      const fontSize = parseFloat(computedStyle.fontSize);
+      if (fontSize && !Number.isNaN(fontSize)) {
+        editorEl.style.fontSize = fontSize + 'px';
       }
-      if (cs.fontFamily) editorEl.style.fontFamily = cs.fontFamily;
+      if (computedStyle.fontFamily) editorEl.style.fontFamily = computedStyle.fontFamily;
     } else {
       editorEl.style.fontSize = '';
       editorEl.style.fontFamily = '';

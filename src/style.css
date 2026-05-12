@@ -191,6 +191,13 @@ main {
 }
 #graph .edge polygon { fill: #4a5568; }
 
+/* Invisible wide hit area for easier edge selection (issue #2). Visual
+   attributes are also set inline on the element so existing edge hover/selected
+   rules cannot make this overlay visible. */
+#graph .edge .edge-hit-area {
+  cursor: pointer;
+}
+
 #graph .edge:hover path,
 #graph .edge:hover polygon {
   stroke: #3182ce;

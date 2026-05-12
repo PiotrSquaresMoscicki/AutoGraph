@@ -435,12 +435,12 @@ window.addEventListener('keydown', (ev) => {
   if ((ev.ctrlKey || ev.metaKey) && !ev.altKey) {
     const inOtherTextField = isTextEditingElement(ae) && ae !== dotEl;
     if (!inOtherTextField) {
-      if (ev.key === 'z' && !ev.shiftKey) {
+      if (ev.key.toLowerCase() === 'z' && !ev.shiftKey) {
         ev.preventDefault();
         undo();
         return;
       }
-      if ((ev.key === 'z' && ev.shiftKey) || ev.key === 'y') {
+      if ((ev.key.toLowerCase() === 'z' && ev.shiftKey) || ev.key.toLowerCase() === 'y') {
         ev.preventDefault();
         redo();
         return;

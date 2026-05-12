@@ -39,6 +39,50 @@ header .hint {
   color: #cbd5e0;
 }
 
+header .header-actions {
+  margin-left: auto;
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+#header-status {
+  font-size: 12px;
+  color: #cbd5e0;
+  margin-right: 6px;
+  max-width: 40ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#header-status.error { color: #feb2b2; }
+
+header .header-actions button {
+  background: #4a5568;
+  color: #fff;
+  border: 1px solid #2d3748;
+  border-radius: 3px;
+  padding: 4px 10px;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+header .header-actions button:hover {
+  background: #3182ce;
+  border-color: #2b6cb0;
+}
+
+header .header-actions button:focus-visible {
+  outline: 2px solid #90cdf4;
+  outline-offset: 1px;
+}
+
+#dot-pane[hidden] {
+  display: none;
+}
+
 main {
   flex: 1;
   display: flex;

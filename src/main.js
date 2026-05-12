@@ -6,15 +6,7 @@ import { serialize, parse } from './dot.js';
 document.querySelector('#app').innerHTML = `
   <header>
     <h1>AutoGraph</h1>
-    <span class="hint">
-      double-click empty space: new node &middot;
-      drag from a node: connect (and create) &middot;
-      double-click node/edge: rename &middot;
-      click: select &middot;
-      Delete: remove
-    </span>
     <span class="header-actions">
-      <span id="header-status" role="status" aria-live="polite"></span>
       <button id="btn-save" type="button">Save</button>
       <button id="btn-load" type="button">Load</button>
       <button id="btn-toggle-dot" type="button">Show DOT</button>
@@ -53,7 +45,6 @@ const graphPane = document.querySelector('#graph-pane');
 const dotPane = document.querySelector('#dot-pane');
 const dotEl = document.querySelector('#dot');
 const statusEl = document.querySelector('#status');
-const headerStatusEl = document.querySelector('#header-status');
 const dragLine = document.querySelector('#drag-line line');
 const dragSvg = document.querySelector('#drag-line');
 const btnSave = document.querySelector('#btn-save');
@@ -77,10 +68,6 @@ function edgeKey(e) { return `${e.from}->${e.to}`; }
 function setStatus(msg, isError = false) {
   statusEl.textContent = msg || '';
   statusEl.classList.toggle('error', !!isError);
-  if (headerStatusEl) {
-    headerStatusEl.textContent = msg || '';
-    headerStatusEl.classList.toggle('error', !!isError);
-  }
 }
 
 // ---------- Rendering ----------
@@ -191,6 +178,69 @@ function addEdgeHitArea(edgeGroup) {
   }
 }
 
+function beginDragFromNode(id, clientX, clientY) {
+  const rect = graphPane.getBoundingClientRect();
+  dragState = {
+    fromId: id,
+    startX: clientX - rect.left,
+    startY: clientY - rect.top,
+    moved: false,
+  };
+  dragLine.setAttribute('x1', dragState.startX);
+  dragLine.setAttribute('y1', dragState.startY);
+  dragLine.setAttribute('x2', dragState.startX);
+  dragLine.setAttribute('y2', dragState.startY);
+}
+
+function updateDragTo(clientX, clientY) {
+  if (!dragState) return;
+  const rect = graphPane.getBoundingClientRect();
+  const x = clientX - rect.left;
+  const y = clientY - rect.top;
+  const dx = x - dragState.startX;
+  const dy = y - dragState.startY;
+  if (!dragState.moved && Math.hypot(dx, dy) > 4) {
+    dragState.moved = true;
+    dragSvg.style.display = 'block';
+  }
+  dragLine.setAttribute('x2', x);
+  dragLine.setAttribute('y2', y);
+}
+
+function finishDragAt(clientX, clientY) {
+  if (!dragState) return;
+  const ds = dragState;
+  dragState = null;
+  dragSvg.style.display = 'none';
+  if (!ds.moved) return;
+
+  // Determine target: did we end over a node?
+  const targetEl = document.elementFromPoint(clientX, clientY);
+  const targetNodeGroup = targetEl ? targetEl.closest('g.node') : null;
+  if (targetNodeGroup) {
+    const targetId = getTitle(targetNodeGroup);
+    if (targetId && targetId !== ds.fromId) {
+      addEdge(ds.fromId, targetId);
+    }
+    return;
+  }
+  // Only treat as "drop on empty" if we ended inside the graph pane.
+  const paneRect = graphPane.getBoundingClientRect();
+  if (
+    clientX >= paneRect.left && clientX <= paneRect.right &&
+    clientY >= paneRect.top && clientY <= paneRect.bottom
+  ) {
+    const newId = addNode();
+    addEdge(ds.fromId, newId);
+  }
+}
+
+function cancelDrag() {
+  if (!dragState) return;
+  dragState = null;
+  dragSvg.style.display = 'none';
+}
+
 function attachGraphInteractions(svgEl) {
   // Node interactions
   for (const g of svgEl.querySelectorAll('g.node')) {
@@ -199,18 +249,16 @@ function attachGraphInteractions(svgEl) {
     g.addEventListener('mousedown', (ev) => {
       if (ev.button !== 0) return;
       ev.stopPropagation();
-      const rect = graphPane.getBoundingClientRect();
-      dragState = {
-        fromId: id,
-        startX: ev.clientX - rect.left,
-        startY: ev.clientY - rect.top,
-        moved: false,
-      };
-      dragLine.setAttribute('x1', dragState.startX);
-      dragLine.setAttribute('y1', dragState.startY);
-      dragLine.setAttribute('x2', dragState.startX);
-      dragLine.setAttribute('y2', dragState.startY);
+      beginDragFromNode(id, ev.clientX, ev.clientY);
     });
+
+    // Touch support: start a drag on touchstart with a single finger.
+    g.addEventListener('touchstart', (ev) => {
+      if (ev.touches.length !== 1) return;
+      ev.stopPropagation();
+      const t = ev.touches[0];
+      beginDragFromNode(id, t.clientX, t.clientY);
+    }, { passive: true });
 
     g.addEventListener('click', (ev) => {
       ev.stopPropagation();
@@ -243,45 +291,40 @@ function attachGraphInteractions(svgEl) {
 // Pane-level handlers (background clicks / dbl-clicks, drag completion).
 graphPane.addEventListener('mousemove', (ev) => {
   if (!dragState) return;
-  const rect = graphPane.getBoundingClientRect();
-  const x = ev.clientX - rect.left;
-  const y = ev.clientY - rect.top;
-  const dx = x - dragState.startX;
-  const dy = y - dragState.startY;
-  if (!dragState.moved && Math.hypot(dx, dy) > 4) {
-    dragState.moved = true;
-    dragSvg.style.display = 'block';
-  }
-  dragLine.setAttribute('x2', x);
-  dragLine.setAttribute('y2', y);
+  updateDragTo(ev.clientX, ev.clientY);
 });
+
+// Touch equivalent of mousemove. Registered non-passive so we can call
+// preventDefault() while a drag is in progress to stop the page from scrolling
+// or pinch-zooming as the user moves their finger from a node.
+graphPane.addEventListener('touchmove', (ev) => {
+  if (!dragState) return;
+  if (ev.touches.length !== 1) return;
+  ev.preventDefault();
+  const t = ev.touches[0];
+  updateDragTo(t.clientX, t.clientY);
+}, { passive: false });
 
 window.addEventListener('mouseup', (ev) => {
   if (!dragState) return;
-  const ds = dragState;
-  dragState = null;
-  dragSvg.style.display = 'none';
-  if (!ds.moved) return;
+  finishDragAt(ev.clientX, ev.clientY);
+});
 
-  // Determine target: was the mouseup over a node?
-  const targetEl = document.elementFromPoint(ev.clientX, ev.clientY);
-  const targetNodeGroup = targetEl ? targetEl.closest('g.node') : null;
-  if (targetNodeGroup) {
-    const targetId = getTitle(targetNodeGroup);
-    if (targetId && targetId !== ds.fromId) {
-      addEdge(ds.fromId, targetId);
-    }
+// Touch equivalent of mouseup. The original touch target receives touchend
+// regardless of where the finger lifts, so we rely on document.elementFromPoint
+// inside finishDragAt to determine the actual drop target.
+window.addEventListener('touchend', (ev) => {
+  if (!dragState) return;
+  const t = ev.changedTouches[0];
+  if (!t) {
+    cancelDrag();
     return;
   }
-  // Only treat as "drop on empty" if we ended inside the graph pane.
-  const paneRect = graphPane.getBoundingClientRect();
-  if (
-    ev.clientX >= paneRect.left && ev.clientX <= paneRect.right &&
-    ev.clientY >= paneRect.top && ev.clientY <= paneRect.bottom
-  ) {
-    const newId = addNode();
-    addEdge(ds.fromId, newId);
-  }
+  finishDragAt(t.clientX, t.clientY);
+});
+
+window.addEventListener('touchcancel', () => {
+  cancelDrag();
 });
 
 graphPane.addEventListener('click', (ev) => {

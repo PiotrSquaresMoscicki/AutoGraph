@@ -66,6 +66,11 @@ The header exposes the main file actions and the DOT pane toggle:
 - Click a node or edge — select it.
 - Double-click a node or edge — rename its label.
 
+### Touch
+
+The same drag-to-connect interaction is available on touch devices: press on a
+node, drag, and lift on another node (or on empty space) to create an edge.
+
 ### Keyboard
 
 - **Delete** / **Backspace** — remove the current selection (ignored while editing text fields).

@@ -51,6 +51,21 @@ Preview the production build:
 npm run preview
 ```
 
+### Tests
+
+Run the automated UI test suite (Playwright):
+
+```bash
+npm test
+```
+
+The test runner builds the production bundle, serves it with `vite preview`,
+and exercises the app in headless Chromium. On first run, install the browser
+binary once with `npx playwright install chromium`.
+
+When adding a new feature or changing user-facing behaviour, add or update a
+test under `tests/`. See `.github/copilot-instructions.md` for details.
+
 ## Usage
 
 The header exposes the main file actions and the DOT pane toggle:

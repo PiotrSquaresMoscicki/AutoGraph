@@ -1325,6 +1325,9 @@ function loadFromCache() {
     if (!raw) return false;
     const data = JSON.parse(raw);
     if (!Array.isArray(data.nodes) || !Array.isArray(data.edges)) return false;
+    // Validate each node has a string id, and each edge has string from/to.
+    if (!data.nodes.every((n) => n && typeof n.id === 'string')) return false;
+    if (!data.edges.every((e) => e && typeof e.from === 'string' && typeof e.to === 'string')) return false;
     state.name = typeof data.name === 'string' ? data.name : DEFAULT_STATE.name;
     state.nodes = data.nodes;
     state.edges = data.edges;
@@ -1414,5 +1417,8 @@ btnNew.addEventListener('click', () => {
 });
 
 // ---------- Boot ----------
+// state is pre-initialised with DEFAULT_STATE values (see `const state` above).
+// loadFromCache() overwrites state fields only on success; on failure the
+// default values remain intact so render() always gets a valid state.
 loadFromCache();
 render();

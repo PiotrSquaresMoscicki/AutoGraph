@@ -156,7 +156,7 @@ function isTextEditingElement(el) {
   return !!(el && (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT' || el.isContentEditable));
 }
 function selectionRef(type, key) { return `${type}:${key}`; }
-function shouldUseMobileRenameAssist() {
+function isTouchDevice() {
   return !!(window.matchMedia?.('(pointer: coarse)').matches || navigator.maxTouchPoints > 0);
 }
 function isGraphElementTarget(target) {
@@ -236,6 +236,12 @@ function getVisiblePaneRect() {
 // ---------- Viewport helpers ----------
 const ZOOM_MIN = 0.1;
 const ZOOM_MAX = 4;
+const INLINE_RENAME_MIN_WIDTH = 120;
+const INLINE_RENAME_MAX_WIDTH = 240;
+const INLINE_RENAME_WIDTH_RATIO = 0.6;
+const INLINE_RENAME_FALLBACK_HEIGHT = 32;
+const MOBILE_RENAME_SETTLE_DELAY_MS = 150;
+const MOBILE_RENAME_IMMEDIATE_SETTLE_DELAY_MS = 250;
 
 function applyViewportTransform() {
   const svg = currentGraphSvg();
@@ -443,7 +449,7 @@ async function render({ updateDotText = true } = {}) {
           if (!svgEl) return;
           attachGraphInteractions(svgEl);
           reapplySelection(svgEl);
-          if (renameSession && !syncRenameEditorViewport(svgEl, { center: shouldUseMobileRenameAssist() })) {
+          if (renameSession && !syncRenameEditorViewport(svgEl, { center: isTouchDevice() })) {
             closeRenameEditor();
           }
           if (!renameSession && pendingRename) {
@@ -1024,17 +1030,17 @@ renameInput.addEventListener('blur', () => {
 });
 
 renameInput.addEventListener('input', () => {
-  if (!renameSession || !shouldUseMobileRenameAssist()) return;
+  if (!renameSession || !isTouchDevice()) return;
   scheduleRenameViewportSync({ center: true });
 });
 
 window.visualViewport?.addEventListener('resize', () => {
-  if (!renameSession || !shouldUseMobileRenameAssist()) return;
+  if (!renameSession || !isTouchDevice()) return;
   scheduleRenameViewportSync({ center: true });
 });
 
 window.visualViewport?.addEventListener('scroll', () => {
-  if (!renameSession || !shouldUseMobileRenameAssist()) return;
+  if (!renameSession || !isTouchDevice()) return;
   scheduleRenameViewportSync({ center: true });
 });
 
@@ -1121,7 +1127,7 @@ function addNode(label, { select = false, rename = false } = {}) {
     // both belong to the same undo step as this addNode, so they skip
     // their own pushSnapshot calls.
     compositeAction = true;
-    if (shouldUseMobileRenameAssist()) openRenameEditor('node', id, { focusImmediately: true });
+    if (isTouchDevice()) openRenameEditor('node', id, { focusImmediately: true });
     else pendingRename = { type: 'node', key: id };
   }
   render();
@@ -1226,8 +1232,11 @@ function positionRenameInput(svgEl, session) {
 
 function positionRenameInputFallback() {
   const visibleRect = getVisiblePaneRect();
-  const width = Math.max(120, Math.min(240, Math.round(visibleRect.width * 0.6)));
-  const height = 32;
+  const width = Math.max(
+    INLINE_RENAME_MIN_WIDTH,
+    Math.min(INLINE_RENAME_MAX_WIDTH, Math.round(visibleRect.width * INLINE_RENAME_WIDTH_RATIO)),
+  );
+  const height = INLINE_RENAME_FALLBACK_HEIGHT;
   renameInput.style.left = `${Math.max(0, Math.round(visibleRect.left + (visibleRect.width - width) / 2))}px`;
   renameInput.style.top = `${Math.max(0, Math.round(visibleRect.top + (visibleRect.height - height) / 2))}px`;
   renameInput.style.width = `${width}px`;
@@ -1318,7 +1327,7 @@ function openRenameEditor(type, key, { focusImmediately = false } = {}) {
   renameInput.value = initialValue;
   renameInput.hidden = false;
   const svgEl = currentGraphSvg();
-  const needsMobileAssist = shouldUseMobileRenameAssist();
+  const needsMobileAssist = isTouchDevice();
   const positioned = syncRenameEditorViewport(svgEl, { center: needsMobileAssist });
   if (!positioned && !focusImmediately) {
     closeRenameEditor();
@@ -1331,7 +1340,7 @@ function openRenameEditor(type, key, { focusImmediately = false } = {}) {
     window.setTimeout(() => {
       if (!renameSession || renameSession.type !== type || renameSession.key !== key) return;
       scheduleRenameViewportSync({ center: true });
-    }, focusImmediately ? 250 : 150);
+    }, focusImmediately ? MOBILE_RENAME_IMMEDIATE_SETTLE_DELAY_MS : MOBILE_RENAME_SETTLE_DELAY_MS);
   }
 }
 

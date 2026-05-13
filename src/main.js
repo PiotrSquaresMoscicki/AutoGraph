@@ -1020,10 +1020,35 @@ window.addEventListener('keydown', (ev) => {
     return;
   }
   const single = getSingleSelection();
-  if ((ev.key === 'F2' || ev.key === 'Enter') && single) {
+  // Tab (and Enter on a selected node): create a connected node and enter
+  // rename mode (one undo step). Shift+Tab reverses edge direction.
+  // addNode with rename:true sets compositeAction=true so addEdge below
+  // skips its own pushSnapshot — the whole sequence is one undo entry.
+  if (
+    ae === graphPane &&
+    single?.type === 'node' &&
+    (ev.key === 'Tab' || ev.key === 'Enter')
+  ) {
+    ev.preventDefault();
+    const fromId = single.key;
+    const newId = addNode(undefined, { select: true, rename: true });
+    if (ev.key === 'Tab' && ev.shiftKey) {
+      addEdge(newId, fromId);
+    } else {
+      addEdge(fromId, newId);
+    }
+    return;
+  }
+  if (ev.key === 'F2' && single) {
     ev.preventDefault();
     if (single.type === 'node') renameNode(single.key);
     else renameEdge(single.key);
+    return;
+  }
+  if (ev.key === 'Enter' && single?.type === 'edge') {
+    ev.preventDefault();
+    renameEdge(single.key);
+    return;
   }
   // Viewport keyboard shortcuts: +/= zoom in, - zoom out, 0 reset 1:1.
   if (ev.key === '+' || ev.key === '=') {
@@ -1042,20 +1067,6 @@ window.addEventListener('keydown', (ev) => {
     ev.preventDefault();
     resetViewport();
     return;
-  }
-  // Tab: create a connected node and enter rename mode (one undo step).
-  // Shift+Tab: same but with reversed edge direction (new → selected).
-  // addNode with rename:true sets compositeAction=true so addEdge below
-  // skips its own pushSnapshot — the whole sequence is one undo entry.
-  if (ev.key === 'Tab' && single?.type === 'node' && ae === graphPane) {
-    ev.preventDefault();
-    const fromId = single.key;
-    const newId = addNode(undefined, { select: true, rename: true });
-    if (ev.shiftKey) {
-      addEdge(newId, fromId);
-    } else {
-      addEdge(fromId, newId);
-    }
   }
 });
 

@@ -75,7 +75,8 @@ node, drag, and lift on another node (or on empty space) to create an edge.
 
 - **Delete** / **Backspace** — remove the current selection (ignored while editing text fields).
 - **F2** — rename the currently selected node or edge.
-- **Enter** — rename the currently selected node or edge.
+- **Enter** (selected node + graph-pane focus) — create a new node connected from the selected node, select it, and enter rename mode (always forward; only **Shift+Tab** creates reverse direction).
+- **Enter** (selected edge) — rename the edge label.
 - **Tab** — when a node is selected and the graph pane has focus, create a new node connected from the selected node, select it, and enter rename mode. Typing a name and pressing Enter completes the flow; repeat to build a chain.
 - **Shift+Tab** — same as Tab but the edge is reversed (new node → selected node).
 

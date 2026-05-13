@@ -576,6 +576,9 @@ function finishDragAt(clientX, clientY) {
     clientX >= paneRect.left && clientX <= paneRect.right &&
     clientY >= paneRect.top && clientY <= paneRect.bottom
   ) {
+    // Suppress the background click that the browser fires after mouseup so it
+    // does not immediately close the rename modal that addNode is about to open.
+    suppressNextBackgroundClick = true;
     const newId = addNode(undefined, { select: true, rename: true });
     addEdge(ds.fromId, newId);
   }

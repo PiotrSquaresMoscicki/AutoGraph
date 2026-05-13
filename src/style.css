@@ -105,22 +105,99 @@ main {
   cursor: grabbing;
 }
 
-#inline-rename {
-  position: absolute;
-  z-index: 10;
+#rename-modal[hidden] {
+  display: none;
+}
+
+#rename-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: rgb(26 32 44 / 0.45);
+}
+
+#rename-dialog {
+  width: min(100%, 360px);
   margin: 0;
-  padding: 2px 6px;
-  border: 1px solid #2b6cb0;
-  border-radius: 3px;
-  font: inherit;
+  padding: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  border: 0;
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: 0 18px 48px rgb(26 32 44 / 0.22);
+}
+
+#rename-dialog h2 {
+  margin: 0;
+  font-size: 18px;
+  color: #1a202c;
+}
+
+#rename-dialog label {
   font-size: 14px;
-  line-height: 1.2;
+  color: #4a5568;
+}
+
+#rename-input {
+  width: 100%;
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid #cbd5e0;
+  border-radius: 6px;
+  font: inherit;
+  font-size: 16px;
   color: #1a202c;
   background: #fff;
 }
 
-#inline-rename[hidden] {
-  display: none;
+#rename-input:focus {
+  outline: 2px solid #90cdf4;
+  outline-offset: 1px;
+  border-color: #3182ce;
+}
+
+.rename-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.rename-actions button {
+  min-height: 36px;
+  padding: 6px 14px;
+  border: 1px solid #cbd5e0;
+  border-radius: 6px;
+  background: #edf2f7;
+  color: #1a202c;
+  font: inherit;
+  cursor: pointer;
+}
+
+.rename-actions button[type="submit"] {
+  border-color: #2b6cb0;
+  background: #3182ce;
+  color: #fff;
+}
+
+.rename-actions button:hover {
+  border-color: #a0aec0;
+  background: #e2e8f0;
+}
+
+.rename-actions button[type="submit"]:hover {
+  border-color: #2c5282;
+  background: #2b6cb0;
+}
+
+.rename-actions button:focus-visible {
+  outline: 2px solid #90cdf4;
+  outline-offset: 1px;
 }
 
 #dot-pane {

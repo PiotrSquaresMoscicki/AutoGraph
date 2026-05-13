@@ -30,6 +30,17 @@ document.querySelector('#app').innerHTML = `
       <div id="status"></div>
     </div>
   </main>
+  <div id="rename-modal" hidden>
+    <form id="rename-dialog">
+      <h2 id="rename-title">Rename</h2>
+      <label id="rename-label" for="rename-input">Name</label>
+      <input id="rename-input" type="text" spellcheck="false" />
+      <div class="rename-actions">
+        <button id="rename-cancel" type="button">Cancel</button>
+        <button type="submit">Save</button>
+      </div>
+    </form>
+  </div>
 `;
 
 // ---------- State ----------
@@ -61,13 +72,14 @@ const btnLoad = document.querySelector('#btn-load');
 const btnFit = document.querySelector('#btn-fit');
 const btnToggleDot = document.querySelector('#btn-toggle-dot');
 const fileInput = document.querySelector('#file-input');
-const renameInput = document.createElement('input');
+const renameModal = document.querySelector('#rename-modal');
+const renameDialog = document.querySelector('#rename-dialog');
+const renameTitle = document.querySelector('#rename-title');
+const renameLabel = document.querySelector('#rename-label');
+const renameInput = document.querySelector('#rename-input');
+const btnRenameCancel = document.querySelector('#rename-cancel');
 dragSvg.style.display = 'none';
 marqueeSvg.style.display = 'none';
-renameInput.type = 'text';
-renameInput.id = 'inline-rename';
-renameInput.hidden = true;
-graphPane.appendChild(renameInput);
 
 // ---------- Viewport ----------
 // d3-graphviz manages its own <svg> inside #graph. We pan/zoom by manipulating
@@ -124,14 +136,10 @@ function currentGraphRootG() {
 let renderToken = 0;
 let suppressDotSync = false;
 let renameSession = null; // { type: 'node'|'edge', key: string, initialValue: string }
-let pendingRename = null; // { type: 'node'|'edge', key: string }
 let panState = null;         // { startX, startY, startTx, startTy }
 let pinchState = null;       // { startDist, startMidX, startMidY, startTx, startTy, startS }
 let marqueeState = null;     // { startX, startY, x, y, width, height, additive, moved }
 let suppressNextBackgroundClick = false;
-let renameViewportSyncFrame = 0;
-let renameViewportSyncCenter = false;
-let renameViewportSettleTimer = 0;
 // Double-tap detection for touch devices (browser won't synthesise dblclick when
 // touch-action:none is set).  Tracks the most recent single-finger background tap.
 let lastBackgroundTap = null; // { x, y, time } | null
@@ -159,11 +167,6 @@ function isTextEditingElement(el) {
   return !!(el && (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT' || el.isContentEditable));
 }
 function selectionRef(type, key) { return `${type}:${key}`; }
-const IS_TOUCH_DEVICE = (() => {
-  const isPrimaryTouchInput = window.matchMedia?.('(hover: none) and (pointer: coarse)').matches;
-  const hasTouchWithoutFinePointer = navigator.maxTouchPoints > 0 && !window.matchMedia?.('(pointer: fine)').matches;
-  return !!(isPrimaryTouchInput || hasTouchWithoutFinePointer);
-})();
 function isGraphElementTarget(target) {
   return !!target?.closest?.('g.node, g.edge');
 }
@@ -201,52 +204,9 @@ function getSingleSelection() {
   return parseSelectionRef(onlyRef);
 }
 
-function getVisiblePaneRect() {
-  const paneRect = graphPane.getBoundingClientRect();
-  const vv = window.visualViewport;
-  if (!vv) {
-    return {
-      left: 0,
-      top: 0,
-      right: paneRect.width,
-      bottom: paneRect.height,
-      width: paneRect.width,
-      height: paneRect.height,
-    };
-  }
-  const left = Math.max(0, vv.offsetLeft - paneRect.left);
-  const top = Math.max(0, vv.offsetTop - paneRect.top);
-  const right = Math.min(paneRect.width, vv.offsetLeft + vv.width - paneRect.left);
-  const bottom = Math.min(paneRect.height, vv.offsetTop + vv.height - paneRect.top);
-  if (right <= left || bottom <= top) {
-    return {
-      left: 0,
-      top: 0,
-      right: paneRect.width,
-      bottom: paneRect.height,
-      width: paneRect.width,
-      height: paneRect.height,
-    };
-  }
-  return {
-    left,
-    top,
-    right,
-    bottom,
-    width: right - left,
-    height: bottom - top,
-  };
-}
-
 // ---------- Viewport helpers ----------
 const ZOOM_MIN = 0.1;
 const ZOOM_MAX = 4;
-const INLINE_RENAME_MIN_WIDTH = 120;
-const INLINE_RENAME_MAX_WIDTH = 240;
-const INLINE_RENAME_WIDTH_RATIO = 0.6;
-const INLINE_RENAME_FALLBACK_HEIGHT = 32;
-const MOBILE_RENAME_SETTLE_DELAY_MS = 150;
-const MOBILE_RENAME_IMMEDIATE_SETTLE_DELAY_MS = 250;
 
 function applyViewportTransform() {
   const svg = currentGraphSvg();
@@ -454,14 +414,6 @@ async function render({ updateDotText = true } = {}) {
           if (!svgEl) return;
           attachGraphInteractions(svgEl);
           reapplySelection(svgEl);
-          if (renameSession && !syncRenameEditorViewport(svgEl, { center: IS_TOUCH_DEVICE })) {
-            closeRenameEditor();
-          }
-          if (!renameSession && pendingRename) {
-            const next = pendingRename;
-            pendingRename = null;
-            openRenameEditor(next.type, next.key);
-          }
         })
         .on('end', () => resolve())
         .renderDot(dot);
@@ -1014,13 +966,6 @@ graphPane.addEventListener('dblclick', (ev) => {
 });
 
 renameInput.addEventListener('keydown', (ev) => {
-  if (ev.key === 'Enter') {
-    ev.preventDefault();
-    ev.stopPropagation();
-    commitRenameEditor();
-    graphPane.focus({ preventScroll: true });
-    return;
-  }
   if (ev.key === 'Escape') {
     ev.preventDefault();
     ev.stopPropagation();
@@ -1029,24 +974,20 @@ renameInput.addEventListener('keydown', (ev) => {
   }
 });
 
-renameInput.addEventListener('blur', () => {
-  if (!renameSession) return;
-  commitRenameEditor();
+renameDialog.addEventListener('submit', (ev) => {
+  ev.preventDefault();
+  commitRenameAndFocusGraph();
 });
 
-renameInput.addEventListener('input', () => {
-  if (!renameSession || !IS_TOUCH_DEVICE) return;
-  scheduleRenameViewportSync({ center: true });
+btnRenameCancel.addEventListener('click', () => {
+  cancelRenameEditor();
+  graphPane.focus({ preventScroll: true });
 });
 
-window.visualViewport?.addEventListener('resize', () => {
-  if (!renameSession || !IS_TOUCH_DEVICE) return;
-  scheduleRenameViewportSync({ center: true });
-});
-
-window.visualViewport?.addEventListener('scroll', () => {
-  if (!renameSession || !IS_TOUCH_DEVICE) return;
-  scheduleRenameViewportSync({ center: true });
+renameModal.addEventListener('click', (ev) => {
+  if (ev.target !== renameModal) return;
+  cancelRenameEditor();
+  graphPane.focus({ preventScroll: true });
 });
 
 // Keyboard: delete selection + rename shortcuts + undo/redo.
@@ -1132,8 +1073,7 @@ function addNode(label, { select = false, rename = false } = {}) {
     // both belong to the same undo step as this addNode, so they skip
     // their own pushSnapshot calls.
     compositeAction = true;
-    if (IS_TOUCH_DEVICE) openRenameEditor('node', id, { focusImmediately: true });
-    else pendingRename = { type: 'node', key: id };
+    openRenameEditor('node', id);
   }
   render();
   return id;
@@ -1208,105 +1148,15 @@ function getRenameValue(type, key) {
   return edge ? (edge.label ?? '') : null;
 }
 
-function findRenameAnchorRect(svgEl, type, key) {
-  const group = type === 'node' ? findNodeGroup(svgEl, key) : findEdgeGroup(svgEl, key);
-  if (!group) return null;
-  const label = group.querySelector('text');
-  if (label) return label.getBoundingClientRect();
-  if (type === 'edge') {
-    const path = group.querySelector(':scope > path');
-    if (path) return path.getBoundingClientRect();
-  }
-  return group.getBoundingClientRect();
-}
-
-function positionRenameInput(svgEl, session) {
-  const anchorRect = findRenameAnchorRect(svgEl, session.type, session.key);
-  if (!anchorRect) return false;
-  const paneRect = graphPane.getBoundingClientRect();
-  const width = Math.max(72, Math.round(anchorRect.width + 16));
-  const height = Math.max(24, Math.round(anchorRect.height + 8));
-  const left = Math.round(anchorRect.left - paneRect.left + (anchorRect.width - width) / 2);
-  const top = Math.round(anchorRect.top - paneRect.top + (anchorRect.height - height) / 2);
-  renameInput.style.left = `${Math.max(0, left)}px`;
-  renameInput.style.top = `${Math.max(0, top)}px`;
-  renameInput.style.width = `${width}px`;
-  renameInput.style.height = `${height}px`;
-  return true;
-}
-
-// When a new node is created on mobile, the SVG anchor may not exist yet.
-// Place the editor in the visible pane so focus can still open the keyboard.
-function positionRenameInputFallback() {
-  const visibleRect = getVisiblePaneRect();
-  const width = Math.max(
-    INLINE_RENAME_MIN_WIDTH,
-    Math.min(INLINE_RENAME_MAX_WIDTH, Math.round(visibleRect.width * INLINE_RENAME_WIDTH_RATIO)),
-  );
-  const height = INLINE_RENAME_FALLBACK_HEIGHT;
-  renameInput.style.left = `${Math.max(0, Math.round(visibleRect.left + (visibleRect.width - width) / 2))}px`;
-  renameInput.style.top = `${Math.max(0, Math.round(visibleRect.top + (visibleRect.height - height) / 2))}px`;
-  renameInput.style.width = `${width}px`;
-  renameInput.style.height = `${height}px`;
-  return true;
-}
-
-// Keep the active rename target centered in the currently visible portion of
-// the pane, accounting for mobile visual viewport changes such as the keyboard.
-function centerRenameTargetInVisiblePane(svgEl, session) {
-  const anchorRect = findRenameAnchorRect(svgEl, session.type, session.key);
-  if (!anchorRect) return;
-  const paneRect = graphPane.getBoundingClientRect();
-  const visibleRect = getVisiblePaneRect();
-  const targetX = anchorRect.left - paneRect.left + anchorRect.width / 2;
-  const targetY = anchorRect.top - paneRect.top + anchorRect.height / 2;
-  const nextTx = state.viewport.tx + (visibleRect.left + visibleRect.width / 2 - targetX);
-  const nextTy = state.viewport.ty + (visibleRect.top + visibleRect.height / 2 - targetY);
-  if (nextTx === state.viewport.tx && nextTy === state.viewport.ty) return;
-  state.viewport.tx = nextTx;
-  state.viewport.ty = nextTy;
-  applyViewportTransform();
-}
-
-function syncRenameEditorViewport(svgEl = currentGraphSvg(), { center = false } = {}) {
-  if (!renameSession || !svgEl) return false;
-  if (center) centerRenameTargetInVisiblePane(svgEl, renameSession);
-  return positionRenameInput(svgEl, renameSession);
-}
-
-// Focus without scrolling so the browser does not fight the viewport alignment
-// we apply for inline rename on mobile.
-function focusRenameInput() {
-  renameInput.focus({ preventScroll: true });
-  renameInput.select();
-}
-
-// Coalesce repeated sync requests into a single animation frame while
-// preserving whether any caller requested centering.
-function scheduleRenameViewportSync({ center = false } = {}) {
-  renameViewportSyncCenter = renameViewportSyncCenter || center;
-  if (renameViewportSyncFrame) return;
-  renameViewportSyncFrame = requestAnimationFrame(() => {
-    const shouldCenter = renameViewportSyncCenter;
-    renameViewportSyncFrame = 0;
-    renameViewportSyncCenter = false;
-    if (!renameSession) return;
-    if (!syncRenameEditorViewport(currentGraphSvg(), { center: shouldCenter })) positionRenameInputFallback();
-  });
+function setRenameDialogContent(type) {
+  const itemName = type === 'node' ? 'node' : 'edge';
+  renameTitle.textContent = `Rename ${itemName}`;
+  renameLabel.textContent = `${itemName === 'node' ? 'Node' : 'Edge'} name`;
 }
 
 function closeRenameEditor() {
-  if (renameViewportSyncFrame) {
-    cancelAnimationFrame(renameViewportSyncFrame);
-    renameViewportSyncFrame = 0;
-  }
-  renameViewportSyncCenter = false;
-  if (renameViewportSettleTimer) {
-    clearTimeout(renameViewportSettleTimer);
-    renameViewportSettleTimer = 0;
-  }
   renameSession = null;
-  renameInput.hidden = true;
+  renameModal.hidden = true;
 }
 
 function commitRenameAndFocusGraph() {
@@ -1345,34 +1195,16 @@ function commitRenameEditor() {
   render();
 }
 
-function openRenameEditor(type, key, { focusImmediately = false } = {}) {
+function openRenameEditor(type, key) {
   if (renameSession) commitRenameEditor();
   const initialValue = getRenameValue(type, key);
   if (initialValue == null) return;
   renameSession = { type, key, initialValue };
+  setRenameDialogContent(type);
   renameInput.value = initialValue;
-  renameInput.hidden = false;
-  const svgEl = currentGraphSvg();
-  const needsMobileAssist = IS_TOUCH_DEVICE;
-  const positioned = syncRenameEditorViewport(svgEl, { center: needsMobileAssist });
-  if (!positioned && !focusImmediately) {
-    closeRenameEditor();
-    return;
-  }
-  if (!positioned) positionRenameInputFallback();
-  focusRenameInput();
-  if (needsMobileAssist) {
-    scheduleRenameViewportSync({ center: true });
-    if (renameViewportSettleTimer) {
-      clearTimeout(renameViewportSettleTimer);
-      renameViewportSettleTimer = 0;
-    }
-    renameViewportSettleTimer = window.setTimeout(() => {
-      renameViewportSettleTimer = 0;
-      if (!renameSession || renameSession.type !== type || renameSession.key !== key) return;
-      scheduleRenameViewportSync({ center: true });
-    }, focusImmediately ? MOBILE_RENAME_IMMEDIATE_SETTLE_DELAY_MS : MOBILE_RENAME_SETTLE_DELAY_MS);
-  }
+  renameModal.hidden = false;
+  renameInput.focus({ preventScroll: true });
+  renameInput.select();
 }
 
 // ---------- DOT textarea: edits drive the model ----------

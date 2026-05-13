@@ -130,6 +130,7 @@ let pinchState = null;       // { startDist, startMidX, startMidY, startTx, star
 let marqueeState = null;     // { startX, startY, x, y, width, height, additive, moved }
 let suppressNextBackgroundClick = false;
 let renameViewportSyncFrame = 0;
+let renameViewportSyncCenter = false;
 let renameViewportSettleTimer = 0;
 // Double-tap detection for touch devices (browser won't synthesise dblclick when
 // touch-action:none is set).  Tracks the most recent single-finger background tap.
@@ -159,9 +160,9 @@ function isTextEditingElement(el) {
 }
 function selectionRef(type, key) { return `${type}:${key}`; }
 const IS_TOUCH_DEVICE = (() => {
-  const touchPrimaryPointer = window.matchMedia?.('(hover: none) and (pointer: coarse)').matches;
-  const touchOnlyFallback = navigator.maxTouchPoints > 0 && !window.matchMedia?.('(pointer: fine)').matches;
-  return !!(touchPrimaryPointer || touchOnlyFallback);
+  const isPrimaryTouchInput = window.matchMedia?.('(hover: none) and (pointer: coarse)').matches;
+  const hasTouchWithoutFinePointer = navigator.maxTouchPoints > 0 && !window.matchMedia?.('(pointer: fine)').matches;
+  return !!(isPrimaryTouchInput || hasTouchWithoutFinePointer);
 })();
 function isGraphElementTarget(target) {
   return !!target?.closest?.('g.node, g.edge');
@@ -1275,11 +1276,14 @@ function focusRenameInput() {
 }
 
 function scheduleRenameViewportSync({ center = false } = {}) {
+  renameViewportSyncCenter = renameViewportSyncCenter || center;
   if (renameViewportSyncFrame) return;
   renameViewportSyncFrame = requestAnimationFrame(() => {
+    const shouldCenter = renameViewportSyncCenter;
     renameViewportSyncFrame = 0;
+    renameViewportSyncCenter = false;
     if (!renameSession) return;
-    if (!syncRenameEditorViewport(currentGraphSvg(), { center })) positionRenameInputFallback();
+    if (!syncRenameEditorViewport(currentGraphSvg(), { center: shouldCenter })) positionRenameInputFallback();
   });
 }
 
@@ -1288,6 +1292,7 @@ function closeRenameEditor() {
     cancelAnimationFrame(renameViewportSyncFrame);
     renameViewportSyncFrame = 0;
   }
+  renameViewportSyncCenter = false;
   if (renameViewportSettleTimer) {
     clearTimeout(renameViewportSettleTimer);
     renameViewportSettleTimer = 0;

@@ -1150,7 +1150,7 @@ function getRenameValue(type, key) {
 
 function setRenameDialogContent(type) {
   const itemLabel = type.charAt(0).toUpperCase() + type.slice(1);
-  renameTitle.textContent = `Rename ${type}`;
+  renameTitle.textContent = `Rename ${itemLabel}`;
   renameLabel.textContent = `${itemLabel} name`;
 }
 

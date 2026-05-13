@@ -3,11 +3,26 @@ import { expect } from '@playwright/test';
 
 /**
  * Open the app with a clean localStorage and wait until the initial render
- * has emitted the default graph SVG. localStorage is cleared only on the first
- * navigation so that tests exercising persistence across reload still work.
+ * has emitted the default graph SVG.
+ *
+ * Every call to openApp resets the session sentinel so that localStorage is
+ * wiped on the upcoming navigation, giving a guaranteed default-graph slate
+ * even when openApp is called multiple times within the same test (e.g. after
+ * graph edits have been auto-saved to the cache).
+ *
+ * Raw page.reload() calls (used in persistence tests) do NOT reset the
+ * sentinel, so they see the saved cache and restore the graph as expected.
  */
 export async function openApp(page) {
-  // Wipe persisted DOT-pane state once, before the first load.
+  // Remove the sentinel from the current page's sessionStorage before navigating.
+  // This makes the initScript below treat the upcoming page.goto as "first load"
+  // and wipe localStorage.  On the very first call the page is about:blank and
+  // sessionStorage may be inaccessible — the .catch() handles that silently.
+  await page.evaluate(() => {
+    try { window.sessionStorage.removeItem('__autograph_test_cleared'); } catch { /* ignore */ }
+  }).catch(() => {});
+
+  // Wipe all persisted state on every openApp navigation (sentinel was just cleared).
   await page.addInitScript(() => {
     if (!window.sessionStorage.getItem('__autograph_test_cleared')) {
       try { window.localStorage.clear(); } catch { /* ignore */ }

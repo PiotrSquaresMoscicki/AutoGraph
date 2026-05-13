@@ -1039,10 +1039,15 @@ window.addEventListener('keydown', (ev) => {
     }
     return;
   }
-  if ((ev.key === 'F2' || (ev.key === 'Enter' && single?.type === 'edge')) && single) {
+  if (ev.key === 'F2' && single) {
     ev.preventDefault();
     if (single.type === 'node') renameNode(single.key);
     else renameEdge(single.key);
+    return;
+  }
+  if (ev.key === 'Enter' && single?.type === 'edge') {
+    ev.preventDefault();
+    renameEdge(single.key);
     return;
   }
   // Viewport keyboard shortcuts: +/= zoom in, - zoom out, 0 reset 1:1.

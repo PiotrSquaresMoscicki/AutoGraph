@@ -1185,7 +1185,13 @@ function cancelRenameEditor() {
   closeRenameEditor();
   // Escape/cancel while renaming a just-added node should abort the add-node
   // operation entirely.
-  if (wasComposite && session?.type === 'node') {
+  if (
+    wasComposite &&
+    session &&
+    session.type === 'node' &&
+    typeof session.key === 'string' &&
+    session.key !== ''
+  ) {
     const nodeId = session.key;
     state.nodes = state.nodes.filter((n) => n.id !== nodeId);
     state.edges = state.edges.filter((e) => e.from !== nodeId && e.to !== nodeId);

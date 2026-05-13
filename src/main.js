@@ -897,6 +897,11 @@ window.addEventListener('touchend', (ev) => {
     if (savedPan && !wasPinch && tapTouch) {
       const moved = Math.hypot(tapTouch.clientX - savedPan.startX, tapTouch.clientY - savedPan.startY);
       if (moved <= DOUBLE_TAP_PX) {
+        if (renameSession) {
+          commitRenameAndFocusGraph();
+          lastBackgroundTap = null;
+          return;
+        }
         const now = Date.now();
         if (lastBackgroundTap) {
           const dt = now - lastBackgroundTap.time;
@@ -947,6 +952,7 @@ graphPane.addEventListener('click', (ev) => {
     suppressNextBackgroundClick = false;
     return;
   }
+  if (renameSession) commitRenameAndFocusGraph();
   clearSelection();
   graphPane.focus({ preventScroll: true });
 });
@@ -1165,6 +1171,11 @@ function positionRenameInput(svgEl, session) {
 function closeRenameEditor() {
   renameSession = null;
   renameInput.hidden = true;
+}
+
+function commitRenameAndFocusGraph() {
+  commitRenameEditor();
+  graphPane.focus({ preventScroll: true });
 }
 
 function cancelRenameEditor() {

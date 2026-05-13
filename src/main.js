@@ -158,11 +158,11 @@ function isTextEditingElement(el) {
   return !!(el && (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT' || el.isContentEditable));
 }
 function selectionRef(type, key) { return `${type}:${key}`; }
-function isTouchDevice() {
+const IS_TOUCH_DEVICE = (() => {
   const touchPrimaryPointer = window.matchMedia?.('(hover: none) and (pointer: coarse)').matches;
   const touchOnlyFallback = navigator.maxTouchPoints > 0 && !window.matchMedia?.('(pointer: fine)').matches;
   return !!(touchPrimaryPointer || touchOnlyFallback);
-}
+})();
 function isGraphElementTarget(target) {
   return !!target?.closest?.('g.node, g.edge');
 }
@@ -453,7 +453,7 @@ async function render({ updateDotText = true } = {}) {
           if (!svgEl) return;
           attachGraphInteractions(svgEl);
           reapplySelection(svgEl);
-          if (renameSession && !syncRenameEditorViewport(svgEl, { center: isTouchDevice() })) {
+          if (renameSession && !syncRenameEditorViewport(svgEl, { center: IS_TOUCH_DEVICE })) {
             closeRenameEditor();
           }
           if (!renameSession && pendingRename) {
@@ -1034,17 +1034,17 @@ renameInput.addEventListener('blur', () => {
 });
 
 renameInput.addEventListener('input', () => {
-  if (!renameSession || !isTouchDevice()) return;
+  if (!renameSession || !IS_TOUCH_DEVICE) return;
   scheduleRenameViewportSync({ center: true });
 });
 
 window.visualViewport?.addEventListener('resize', () => {
-  if (!renameSession || !isTouchDevice()) return;
+  if (!renameSession || !IS_TOUCH_DEVICE) return;
   scheduleRenameViewportSync({ center: true });
 });
 
 window.visualViewport?.addEventListener('scroll', () => {
-  if (!renameSession || !isTouchDevice()) return;
+  if (!renameSession || !IS_TOUCH_DEVICE) return;
   scheduleRenameViewportSync({ center: true });
 });
 
@@ -1131,7 +1131,7 @@ function addNode(label, { select = false, rename = false } = {}) {
     // both belong to the same undo step as this addNode, so they skip
     // their own pushSnapshot calls.
     compositeAction = true;
-    if (isTouchDevice()) openRenameEditor('node', id, { focusImmediately: true });
+    if (IS_TOUCH_DEVICE) openRenameEditor('node', id, { focusImmediately: true });
     else pendingRename = { type: 'node', key: id };
   }
   render();
@@ -1250,18 +1250,17 @@ function positionRenameInputFallback() {
 
 function centerRenameTargetInVisiblePane(svgEl, session) {
   const anchorRect = findRenameAnchorRect(svgEl, session.type, session.key);
-  if (!anchorRect) return false;
+  if (!anchorRect) return;
   const paneRect = graphPane.getBoundingClientRect();
   const visibleRect = getVisiblePaneRect();
   const targetX = anchorRect.left - paneRect.left + anchorRect.width / 2;
   const targetY = anchorRect.top - paneRect.top + anchorRect.height / 2;
   const nextTx = state.viewport.tx + (visibleRect.left + visibleRect.width / 2 - targetX);
   const nextTy = state.viewport.ty + (visibleRect.top + visibleRect.height / 2 - targetY);
-  if (nextTx === state.viewport.tx && nextTy === state.viewport.ty) return true;
+  if (nextTx === state.viewport.tx && nextTy === state.viewport.ty) return;
   state.viewport.tx = nextTx;
   state.viewport.ty = nextTy;
   applyViewportTransform();
-  return true;
 }
 
 function syncRenameEditorViewport(svgEl = currentGraphSvg(), { center = false } = {}) {
@@ -1341,7 +1340,7 @@ function openRenameEditor(type, key, { focusImmediately = false } = {}) {
   renameInput.value = initialValue;
   renameInput.hidden = false;
   const svgEl = currentGraphSvg();
-  const needsMobileAssist = isTouchDevice();
+  const needsMobileAssist = IS_TOUCH_DEVICE;
   const positioned = syncRenameEditorViewport(svgEl, { center: needsMobileAssist });
   if (!positioned && !focusImmediately) {
     closeRenameEditor();
@@ -1351,6 +1350,10 @@ function openRenameEditor(type, key, { focusImmediately = false } = {}) {
   focusRenameInput();
   if (needsMobileAssist) {
     scheduleRenameViewportSync({ center: true });
+    if (renameViewportSettleTimer) {
+      clearTimeout(renameViewportSettleTimer);
+      renameViewportSettleTimer = 0;
+    }
     renameViewportSettleTimer = window.setTimeout(() => {
       renameViewportSettleTimer = 0;
       if (!renameSession || renameSession.type !== type || renameSession.key !== key) return;

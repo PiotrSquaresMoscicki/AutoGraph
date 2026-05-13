@@ -32,7 +32,7 @@ document.querySelector('#app').innerHTML = `
   </main>
   <div id="rename-modal" hidden>
     <form id="rename-dialog">
-      <h2 id="rename-title">Rename</h2>
+      <h2 id="rename-title" aria-live="polite">Rename</h2>
       <label id="rename-label" for="rename-input">Name</label>
       <input id="rename-input" type="text" spellcheck="false" />
       <div class="rename-actions">

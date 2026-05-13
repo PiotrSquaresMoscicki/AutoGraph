@@ -156,6 +156,9 @@ function isTextEditingElement(el) {
   return !!(el && (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT' || el.isContentEditable));
 }
 function selectionRef(type, key) { return `${type}:${key}`; }
+function shouldUseMobileRenameAssist() {
+  return !!(window.matchMedia?.('(pointer: coarse)').matches || navigator.maxTouchPoints > 0);
+}
 function isGraphElementTarget(target) {
   return !!target?.closest?.('g.node, g.edge');
 }
@@ -191,6 +194,43 @@ function getSingleSelection() {
   if (state.selected.size !== 1) return null;
   const onlyRef = state.selected.values().next().value;
   return parseSelectionRef(onlyRef);
+}
+
+function getVisiblePaneRect() {
+  const paneRect = graphPane.getBoundingClientRect();
+  const vv = window.visualViewport;
+  if (!vv) {
+    return {
+      left: 0,
+      top: 0,
+      right: paneRect.width,
+      bottom: paneRect.height,
+      width: paneRect.width,
+      height: paneRect.height,
+    };
+  }
+  const left = Math.max(0, vv.offsetLeft - paneRect.left);
+  const top = Math.max(0, vv.offsetTop - paneRect.top);
+  const right = Math.min(paneRect.width, vv.offsetLeft + vv.width - paneRect.left);
+  const bottom = Math.min(paneRect.height, vv.offsetTop + vv.height - paneRect.top);
+  if (right <= left || bottom <= top) {
+    return {
+      left: 0,
+      top: 0,
+      right: paneRect.width,
+      bottom: paneRect.height,
+      width: paneRect.width,
+      height: paneRect.height,
+    };
+  }
+  return {
+    left,
+    top,
+    right,
+    bottom,
+    width: right - left,
+    height: bottom - top,
+  };
 }
 
 // ---------- Viewport helpers ----------
@@ -403,7 +443,7 @@ async function render({ updateDotText = true } = {}) {
           if (!svgEl) return;
           attachGraphInteractions(svgEl);
           reapplySelection(svgEl);
-          if (renameSession && !positionRenameInput(svgEl, renameSession)) {
+          if (renameSession && !syncRenameEditorViewport(svgEl, { center: shouldUseMobileRenameAssist() })) {
             closeRenameEditor();
           }
           if (!renameSession && pendingRename) {
@@ -983,6 +1023,21 @@ renameInput.addEventListener('blur', () => {
   commitRenameEditor();
 });
 
+renameInput.addEventListener('input', () => {
+  if (!renameSession || !shouldUseMobileRenameAssist()) return;
+  scheduleRenameViewportSync({ center: true });
+});
+
+window.visualViewport?.addEventListener('resize', () => {
+  if (!renameSession || !shouldUseMobileRenameAssist()) return;
+  scheduleRenameViewportSync({ center: true });
+});
+
+window.visualViewport?.addEventListener('scroll', () => {
+  if (!renameSession || !shouldUseMobileRenameAssist()) return;
+  scheduleRenameViewportSync({ center: true });
+});
+
 // Keyboard: delete selection + rename shortcuts + undo/redo.
 window.addEventListener('keydown', (ev) => {
   const ae = document.activeElement;
@@ -1061,12 +1116,13 @@ function addNode(label, { select = false, rename = false } = {}) {
   const shouldSelect = select || rename;
   if (shouldSelect) setSingleSelection('node', id);
   if (rename) {
-    pendingRename = { type: 'node', key: id };
     // Mark a composite transaction: the following addEdge (triggered by
     // finishDragAt after dropping on empty space) and commitRenameEditor
     // both belong to the same undo step as this addNode, so they skip
     // their own pushSnapshot calls.
     compositeAction = true;
+    if (shouldUseMobileRenameAssist()) openRenameEditor('node', id, { focusImmediately: true });
+    else pendingRename = { type: 'node', key: id };
   }
   render();
   return id;
@@ -1168,6 +1224,51 @@ function positionRenameInput(svgEl, session) {
   return true;
 }
 
+function positionRenameInputFallback() {
+  const visibleRect = getVisiblePaneRect();
+  const width = Math.max(120, Math.min(240, Math.round(visibleRect.width * 0.6)));
+  const height = 32;
+  renameInput.style.left = `${Math.max(0, Math.round(visibleRect.left + (visibleRect.width - width) / 2))}px`;
+  renameInput.style.top = `${Math.max(0, Math.round(visibleRect.top + (visibleRect.height - height) / 2))}px`;
+  renameInput.style.width = `${width}px`;
+  renameInput.style.height = `${height}px`;
+  return true;
+}
+
+function centerRenameTargetInVisiblePane(svgEl, session) {
+  const anchorRect = findRenameAnchorRect(svgEl, session.type, session.key);
+  if (!anchorRect) return false;
+  const paneRect = graphPane.getBoundingClientRect();
+  const visibleRect = getVisiblePaneRect();
+  const targetX = anchorRect.left - paneRect.left + anchorRect.width / 2;
+  const targetY = anchorRect.top - paneRect.top + anchorRect.height / 2;
+  const nextTx = state.viewport.tx + (visibleRect.left + visibleRect.width / 2 - targetX);
+  const nextTy = state.viewport.ty + (visibleRect.top + visibleRect.height / 2 - targetY);
+  if (nextTx === state.viewport.tx && nextTy === state.viewport.ty) return true;
+  state.viewport.tx = nextTx;
+  state.viewport.ty = nextTy;
+  applyViewportTransform();
+  return true;
+}
+
+function syncRenameEditorViewport(svgEl = currentGraphSvg(), { center = false } = {}) {
+  if (!renameSession || !svgEl) return false;
+  if (center) centerRenameTargetInVisiblePane(svgEl, renameSession);
+  return positionRenameInput(svgEl, renameSession);
+}
+
+function focusRenameInput() {
+  renameInput.focus({ preventScroll: true });
+  renameInput.select();
+}
+
+function scheduleRenameViewportSync({ center = false } = {}) {
+  requestAnimationFrame(() => {
+    if (!renameSession) return;
+    if (!syncRenameEditorViewport(currentGraphSvg(), { center })) positionRenameInputFallback();
+  });
+}
+
 function closeRenameEditor() {
   renameSession = null;
   renameInput.hidden = true;
@@ -1209,7 +1310,7 @@ function commitRenameEditor() {
   render();
 }
 
-function openRenameEditor(type, key) {
+function openRenameEditor(type, key, { focusImmediately = false } = {}) {
   if (renameSession) commitRenameEditor();
   const initialValue = getRenameValue(type, key);
   if (initialValue == null) return;
@@ -1217,12 +1318,21 @@ function openRenameEditor(type, key) {
   renameInput.value = initialValue;
   renameInput.hidden = false;
   const svgEl = currentGraphSvg();
-  if (!svgEl || !positionRenameInput(svgEl, renameSession)) {
+  const needsMobileAssist = shouldUseMobileRenameAssist();
+  const positioned = syncRenameEditorViewport(svgEl, { center: needsMobileAssist });
+  if (!positioned && !focusImmediately) {
     closeRenameEditor();
     return;
   }
-  renameInput.focus();
-  renameInput.select();
+  if (!positioned) positionRenameInputFallback();
+  focusRenameInput();
+  if (needsMobileAssist) {
+    scheduleRenameViewportSync({ center: true });
+    window.setTimeout(() => {
+      if (!renameSession || renameSession.type !== type || renameSession.key !== key) return;
+      scheduleRenameViewportSync({ center: true });
+    }, focusImmediately ? 250 : 150);
+  }
 }
 
 // ---------- DOT textarea: edits drive the model ----------

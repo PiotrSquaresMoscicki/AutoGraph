@@ -30,6 +30,17 @@ document.querySelector('#app').innerHTML = `
       <div id="status"></div>
     </div>
   </main>
+  <div id="rename-modal" hidden>
+    <form id="rename-dialog">
+      <h2 id="rename-title" aria-live="polite">Rename</h2>
+      <label id="rename-label" for="rename-input">Name</label>
+      <input id="rename-input" type="text" spellcheck="false" />
+      <div class="rename-actions">
+        <button id="rename-cancel" type="button">Cancel</button>
+        <button type="submit">Save</button>
+      </div>
+    </form>
+  </div>
 `;
 
 // ---------- State ----------
@@ -61,13 +72,14 @@ const btnLoad = document.querySelector('#btn-load');
 const btnFit = document.querySelector('#btn-fit');
 const btnToggleDot = document.querySelector('#btn-toggle-dot');
 const fileInput = document.querySelector('#file-input');
-const renameInput = document.createElement('input');
+const renameModal = document.querySelector('#rename-modal');
+const renameDialog = document.querySelector('#rename-dialog');
+const renameTitle = document.querySelector('#rename-title');
+const renameLabel = document.querySelector('#rename-label');
+const renameInput = document.querySelector('#rename-input');
+const btnRenameCancel = document.querySelector('#rename-cancel');
 dragSvg.style.display = 'none';
 marqueeSvg.style.display = 'none';
-renameInput.type = 'text';
-renameInput.id = 'inline-rename';
-renameInput.hidden = true;
-graphPane.appendChild(renameInput);
 
 // ---------- Viewport ----------
 // d3-graphviz manages its own <svg> inside #graph. We pan/zoom by manipulating
@@ -124,7 +136,6 @@ function currentGraphRootG() {
 let renderToken = 0;
 let suppressDotSync = false;
 let renameSession = null; // { type: 'node'|'edge', key: string, initialValue: string }
-let pendingRename = null; // { type: 'node'|'edge', key: string }
 let panState = null;         // { startX, startY, startTx, startTy }
 let pinchState = null;       // { startDist, startMidX, startMidY, startTx, startTy, startS }
 let marqueeState = null;     // { startX, startY, x, y, width, height, additive, moved }
@@ -403,14 +414,6 @@ async function render({ updateDotText = true } = {}) {
           if (!svgEl) return;
           attachGraphInteractions(svgEl);
           reapplySelection(svgEl);
-          if (renameSession && !positionRenameInput(svgEl, renameSession)) {
-            closeRenameEditor();
-          }
-          if (!renameSession && pendingRename) {
-            const next = pendingRename;
-            pendingRename = null;
-            openRenameEditor(next.type, next.key);
-          }
         })
         .on('end', () => resolve())
         .renderDot(dot);
@@ -963,13 +966,6 @@ graphPane.addEventListener('dblclick', (ev) => {
 });
 
 renameInput.addEventListener('keydown', (ev) => {
-  if (ev.key === 'Enter') {
-    ev.preventDefault();
-    ev.stopPropagation();
-    commitRenameEditor();
-    graphPane.focus({ preventScroll: true });
-    return;
-  }
   if (ev.key === 'Escape') {
     ev.preventDefault();
     ev.stopPropagation();
@@ -978,9 +974,20 @@ renameInput.addEventListener('keydown', (ev) => {
   }
 });
 
-renameInput.addEventListener('blur', () => {
-  if (!renameSession) return;
-  commitRenameEditor();
+renameDialog.addEventListener('submit', (ev) => {
+  ev.preventDefault();
+  commitRenameAndFocusGraph();
+});
+
+btnRenameCancel.addEventListener('click', () => {
+  cancelRenameEditor();
+  graphPane.focus({ preventScroll: true });
+});
+
+renameModal.addEventListener('click', (ev) => {
+  if (ev.target !== renameModal) return;
+  cancelRenameEditor();
+  graphPane.focus({ preventScroll: true });
 });
 
 // Keyboard: delete selection + rename shortcuts + undo/redo.
@@ -1061,12 +1068,12 @@ function addNode(label, { select = false, rename = false } = {}) {
   const shouldSelect = select || rename;
   if (shouldSelect) setSingleSelection('node', id);
   if (rename) {
-    pendingRename = { type: 'node', key: id };
     // Mark a composite transaction: the following addEdge (triggered by
     // finishDragAt after dropping on empty space) and commitRenameEditor
     // both belong to the same undo step as this addNode, so they skip
     // their own pushSnapshot calls.
     compositeAction = true;
+    openRenameEditor('node', id);
   }
   render();
   return id;
@@ -1141,36 +1148,15 @@ function getRenameValue(type, key) {
   return edge ? (edge.label ?? '') : null;
 }
 
-function findRenameAnchorRect(svgEl, type, key) {
-  const group = type === 'node' ? findNodeGroup(svgEl, key) : findEdgeGroup(svgEl, key);
-  if (!group) return null;
-  const label = group.querySelector('text');
-  if (label) return label.getBoundingClientRect();
-  if (type === 'edge') {
-    const path = group.querySelector(':scope > path');
-    if (path) return path.getBoundingClientRect();
-  }
-  return group.getBoundingClientRect();
-}
-
-function positionRenameInput(svgEl, session) {
-  const anchorRect = findRenameAnchorRect(svgEl, session.type, session.key);
-  if (!anchorRect) return false;
-  const paneRect = graphPane.getBoundingClientRect();
-  const width = Math.max(72, Math.round(anchorRect.width + 16));
-  const height = Math.max(24, Math.round(anchorRect.height + 8));
-  const left = Math.round(anchorRect.left - paneRect.left + (anchorRect.width - width) / 2);
-  const top = Math.round(anchorRect.top - paneRect.top + (anchorRect.height - height) / 2);
-  renameInput.style.left = `${Math.max(0, left)}px`;
-  renameInput.style.top = `${Math.max(0, top)}px`;
-  renameInput.style.width = `${width}px`;
-  renameInput.style.height = `${height}px`;
-  return true;
+function setRenameDialogContent(type) {
+  const itemLabel = type.charAt(0).toUpperCase() + type.slice(1);
+  renameTitle.textContent = `Rename ${itemLabel}`;
+  renameLabel.textContent = `${itemLabel} name`;
 }
 
 function closeRenameEditor() {
   renameSession = null;
-  renameInput.hidden = true;
+  renameModal.hidden = true;
 }
 
 function commitRenameAndFocusGraph() {
@@ -1214,14 +1200,10 @@ function openRenameEditor(type, key) {
   const initialValue = getRenameValue(type, key);
   if (initialValue == null) return;
   renameSession = { type, key, initialValue };
+  setRenameDialogContent(type);
   renameInput.value = initialValue;
-  renameInput.hidden = false;
-  const svgEl = currentGraphSvg();
-  if (!svgEl || !positionRenameInput(svgEl, renameSession)) {
-    closeRenameEditor();
-    return;
-  }
-  renameInput.focus();
+  renameModal.hidden = false;
+  renameInput.focus({ preventScroll: true });
   renameInput.select();
 }
 

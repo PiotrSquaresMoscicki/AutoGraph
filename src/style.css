@@ -117,7 +117,7 @@ main {
   align-items: center;
   justify-content: center;
   padding: 20px;
-  background: rgb(26 32 44 / 0.45);
+  background: rgba(26, 32, 44, 0.45);
 }
 
 #rename-dialog {
@@ -130,7 +130,7 @@ main {
   border: 0;
   border-radius: 10px;
   background: #fff;
-  box-shadow: 0 18px 48px rgb(26 32 44 / 0.22);
+  box-shadow: 0 18px 48px rgba(26, 32, 44, 0.22);
 }
 
 #rename-dialog h2 {

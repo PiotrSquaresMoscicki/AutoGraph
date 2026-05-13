@@ -1150,8 +1150,9 @@ function getRenameValue(type, key) {
 
 function setRenameDialogContent(type) {
   const itemName = type === 'node' ? 'node' : 'edge';
+  const itemLabel = itemName.charAt(0).toUpperCase() + itemName.slice(1);
   renameTitle.textContent = `Rename ${itemName}`;
-  renameLabel.textContent = `${itemName === 'node' ? 'Node' : 'Edge'} name`;
+  renameLabel.textContent = `${itemLabel} name`;
 }
 
 function closeRenameEditor() {

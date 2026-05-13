@@ -129,6 +129,8 @@ let panState = null;         // { startX, startY, startTx, startTy }
 let pinchState = null;       // { startDist, startMidX, startMidY, startTx, startTy, startS }
 let marqueeState = null;     // { startX, startY, x, y, width, height, additive, moved }
 let suppressNextBackgroundClick = false;
+let renameViewportSyncFrame = 0;
+let renameViewportSettleTimer = 0;
 // Double-tap detection for touch devices (browser won't synthesise dblclick when
 // touch-action:none is set).  Tracks the most recent single-finger background tap.
 let lastBackgroundTap = null; // { x, y, time } | null
@@ -157,7 +159,9 @@ function isTextEditingElement(el) {
 }
 function selectionRef(type, key) { return `${type}:${key}`; }
 function isTouchDevice() {
-  return !!(window.matchMedia?.('(pointer: coarse)').matches || navigator.maxTouchPoints > 0);
+  const touchPrimaryPointer = window.matchMedia?.('(hover: none) and (pointer: coarse)').matches;
+  const touchOnlyFallback = navigator.maxTouchPoints > 0 && !window.matchMedia?.('(pointer: fine)').matches;
+  return !!(touchPrimaryPointer || touchOnlyFallback);
 }
 function isGraphElementTarget(target) {
   return !!target?.closest?.('g.node, g.edge');
@@ -1272,13 +1276,23 @@ function focusRenameInput() {
 }
 
 function scheduleRenameViewportSync({ center = false } = {}) {
-  requestAnimationFrame(() => {
+  if (renameViewportSyncFrame) return;
+  renameViewportSyncFrame = requestAnimationFrame(() => {
+    renameViewportSyncFrame = 0;
     if (!renameSession) return;
     if (!syncRenameEditorViewport(currentGraphSvg(), { center })) positionRenameInputFallback();
   });
 }
 
 function closeRenameEditor() {
+  if (renameViewportSyncFrame) {
+    cancelAnimationFrame(renameViewportSyncFrame);
+    renameViewportSyncFrame = 0;
+  }
+  if (renameViewportSettleTimer) {
+    clearTimeout(renameViewportSettleTimer);
+    renameViewportSettleTimer = 0;
+  }
   renameSession = null;
   renameInput.hidden = true;
 }
@@ -1337,7 +1351,8 @@ function openRenameEditor(type, key, { focusImmediately = false } = {}) {
   focusRenameInput();
   if (needsMobileAssist) {
     scheduleRenameViewportSync({ center: true });
-    window.setTimeout(() => {
+    renameViewportSettleTimer = window.setTimeout(() => {
+      renameViewportSettleTimer = 0;
       if (!renameSession || renameSession.type !== type || renameSession.key !== key) return;
       scheduleRenameViewportSync({ center: true });
     }, focusImmediately ? MOBILE_RENAME_IMMEDIATE_SETTLE_DELAY_MS : MOBILE_RENAME_SETTLE_DELAY_MS);

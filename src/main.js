@@ -1235,6 +1235,8 @@ function positionRenameInput(svgEl, session) {
   return true;
 }
 
+// When a new node is created on mobile, the SVG anchor may not exist yet.
+// Place the editor in the visible pane so focus can still open the keyboard.
 function positionRenameInputFallback() {
   const visibleRect = getVisiblePaneRect();
   const width = Math.max(
@@ -1249,6 +1251,8 @@ function positionRenameInputFallback() {
   return true;
 }
 
+// Keep the active rename target centered in the currently visible portion of
+// the pane, accounting for mobile visual viewport changes such as the keyboard.
 function centerRenameTargetInVisiblePane(svgEl, session) {
   const anchorRect = findRenameAnchorRect(svgEl, session.type, session.key);
   if (!anchorRect) return;
@@ -1270,11 +1274,15 @@ function syncRenameEditorViewport(svgEl = currentGraphSvg(), { center = false } 
   return positionRenameInput(svgEl, renameSession);
 }
 
+// Focus without scrolling so the browser does not fight the viewport alignment
+// we apply for inline rename on mobile.
 function focusRenameInput() {
   renameInput.focus({ preventScroll: true });
   renameInput.select();
 }
 
+// Coalesce repeated sync requests into a single animation frame while
+// preserving whether any caller requested centering.
 function scheduleRenameViewportSync({ center = false } = {}) {
   renameViewportSyncCenter = renameViewportSyncCenter || center;
   if (renameViewportSyncFrame) return;

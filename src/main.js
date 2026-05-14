@@ -969,7 +969,7 @@ renameInput.addEventListener('keydown', (ev) => {
   if (ev.key === 'Escape') {
     ev.preventDefault();
     ev.stopPropagation();
-    cancelRenameEditor();
+    cancelRenameEditor({ abortCompositeAdd: true });
     graphPane.focus({ preventScroll: true });
   }
 });
@@ -1175,7 +1175,7 @@ function commitRenameAndFocusGraph() {
   graphPane.focus({ preventScroll: true });
 }
 
-function cancelRenameEditor() {
+function cancelRenameEditor({ abortCompositeAdd = false } = {}) {
   const session = renameSession;
   const wasComposite = compositeAction;
   // Clear the composite flag. No snapshot is needed here: the snapshot pushed
@@ -1183,9 +1183,10 @@ function cancelRenameEditor() {
   // so Ctrl+Z will undo all of it in one step.
   compositeAction = false;
   closeRenameEditor();
-  // Escape/cancel while renaming a just-added node should abort the add-node
+  // Escape while renaming a just-added node should abort the add-node
   // operation entirely.
   if (
+    abortCompositeAdd &&
     wasComposite &&
     session &&
     session.type === 'node' &&

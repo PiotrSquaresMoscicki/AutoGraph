@@ -433,6 +433,7 @@ async function render({ updateDotText = true } = {}) {
   // After the transition fully ends, settle the SVG to the current viewport
   // (in case state.viewport changed while the transition was running).
   applyViewportTransform();
+  reapplySelection(svgEl);
   // Fit content into view on the very first render.
   if (needsInitialFit) {
     needsInitialFit = false;

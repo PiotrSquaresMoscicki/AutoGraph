@@ -11,6 +11,7 @@ document.querySelector('#app').innerHTML = `
   <header>
     <h1>AutoGraph</h1>
     <span class="header-actions">
+      <button id="btn-new" type="button">New</button>
       <button id="btn-save" type="button">Save</button>
       <button id="btn-load" type="button">Load</button>
       <button id="btn-fit" type="button">Fit</button>
@@ -67,6 +68,7 @@ const dragLine = document.querySelector('#drag-line line');
 const dragSvg = document.querySelector('#drag-line');
 const marqueeSvg = document.querySelector('#marquee-layer');
 const marqueeRect = document.querySelector('#marquee-layer rect');
+const btnNew = document.querySelector('#btn-new');
 const btnSave = document.querySelector('#btn-save');
 const btnLoad = document.querySelector('#btn-load');
 const btnFit = document.querySelector('#btn-fit');
@@ -438,6 +440,7 @@ async function render({ updateDotText = true } = {}) {
     requestAnimationFrame(fitContent);
   }
   setStatus(`${state.nodes.length} node(s), ${state.edges.length} edge(s)`);
+  saveToCache();
   resolveThis();
 }
 
@@ -577,6 +580,9 @@ function finishDragAt(clientX, clientY) {
     clientX >= paneRect.left && clientX <= paneRect.right &&
     clientY >= paneRect.top && clientY <= paneRect.bottom
   ) {
+    // Suppress the background click that the browser fires after mouseup so it
+    // does not immediately close the rename modal that addNode is about to open.
+    suppressNextBackgroundClick = true;
     const newId = addNode(undefined, { select: true, rename: true });
     addEdge(ds.fromId, newId);
   }
@@ -1290,6 +1296,60 @@ btnFit.addEventListener('click', fitContent);
 
 applyDotPaneVisibility(isDotPaneVisible());
 
+// ---------- Local cache (auto-save) ----------
+const GRAPH_CACHE_KEY = 'autograph.graph.cache';
+
+const DEFAULT_STATE = {
+  name: 'graph',
+  nodes: [
+    { id: 'a', label: 'A' },
+    { id: 'b', label: 'B' },
+  ],
+  edges: [{ from: 'a', to: 'b', label: '' }],
+  nextId: 3,
+};
+
+function saveToCache() {
+  try {
+    const data = {
+      name: state.name,
+      nodes: state.nodes,
+      edges: state.edges,
+      nextId: state.nextId,
+    };
+    window.localStorage.setItem(GRAPH_CACHE_KEY, JSON.stringify(data));
+  } catch {
+    // ignore quota / disabled storage
+  }
+}
+
+function loadFromCache() {
+  try {
+    const raw = window.localStorage.getItem(GRAPH_CACHE_KEY);
+    if (!raw) return false;
+    const data = JSON.parse(raw);
+    if (!Array.isArray(data.nodes) || !Array.isArray(data.edges)) return false;
+    // Validate each node has a string id, and each edge has string from/to.
+    if (!data.nodes.every((n) => n && typeof n.id === 'string')) return false;
+    if (!data.edges.every((e) => e && typeof e.from === 'string' && typeof e.to === 'string')) return false;
+    state.name = typeof data.name === 'string' ? data.name : DEFAULT_STATE.name;
+    state.nodes = data.nodes;
+    state.edges = data.edges;
+    state.nextId = typeof data.nextId === 'number' ? data.nextId : DEFAULT_STATE.nextId;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function clearCache() {
+  try {
+    window.localStorage.removeItem(GRAPH_CACHE_KEY);
+  } catch {
+    // ignore
+  }
+}
+
 // ---------- Save / Load ----------
 function sanitizeFilename(name) {
   const cleaned = String(name || '')
@@ -1347,5 +1407,22 @@ fileInput.addEventListener('change', async () => {
   }
 });
 
+btnNew.addEventListener('click', () => {
+  pushSnapshot();
+  state.name = DEFAULT_STATE.name;
+  state.nodes = structuredClone(DEFAULT_STATE.nodes);
+  state.edges = structuredClone(DEFAULT_STATE.edges);
+  state.nextId = DEFAULT_STATE.nextId;
+  state.selected.clear();
+  dotEl.classList.remove('invalid');
+  clearCache();
+  needsInitialFit = true;
+  render();
+});
+
 // ---------- Boot ----------
+// state is pre-initialised with DEFAULT_STATE values (see `const state` above).
+// loadFromCache() overwrites state fields only on success; on failure the
+// default values remain intact so render() always gets a valid state.
+loadFromCache();
 render();

@@ -139,3 +139,124 @@ export async function cancelRenameDialog(page) {
   await page.locator('#rename-input').press('Escape');
   await expect(modal).toBeHidden();
 }
+
+/**
+ * Simulate dragging from the center of a node (by id) to an empty area of the
+ * graph pane, triggering the drag-to-create flow. Events are dispatched via
+ * page.evaluate so coordinates are taken from the live DOM and are consistent
+ * with what document.elementFromPoint sees in finishDragAt.
+ *
+ * NOTE: JS-dispatched events do NOT cause the browser to synthesise a `click`
+ * after mouseup. The regression test for the `suppressNextBackgroundClick` fix
+ * therefore explicitly dispatches a click on graphPane (via page.evaluate) after
+ * calling this helper to verify that click is suppressed.
+ */
+export async function dragFromNodeToEmpty(page, nodeId) {
+  await page.evaluate((nodeId) => {
+    const titleEl = Array.from(
+      document.querySelectorAll('#graph svg g.node > title'),
+    ).find((t) => t.textContent === nodeId);
+    if (!titleEl) throw new Error(`node "${nodeId}" not found`);
+    const nodeRect = titleEl.parentNode.getBoundingClientRect();
+    const cx = nodeRect.left + nodeRect.width / 2;
+    const cy = nodeRect.top + nodeRect.height / 2;
+    // Pick the first pane corner (30 px inset) that is not over any node.
+    const pane = document.querySelector('#graph-pane');
+    const pr = pane.getBoundingClientRect();
+    const allNodes = Array.from(document.querySelectorAll('#graph svg g.node'));
+    const candidates = [
+      [pr.right - 30, pr.top + 30],    // top-right
+      [pr.left + 30, pr.bottom - 30],  // bottom-left
+      [pr.left + 30, pr.top + 30],     // top-left
+      [pr.right - 30, pr.bottom - 30], // bottom-right
+    ];
+    let tx = candidates[0][0]; let ty = candidates[0][1];
+    for (const [x, y] of candidates) {
+      const hit = allNodes.some((g) => {
+        const r = g.getBoundingClientRect();
+        return x >= r.left - 15 && x <= r.right + 15 && y >= r.top - 15 && y <= r.bottom + 15;
+      });
+      if (!hit) { tx = x; ty = y; break; }
+    }
+    // Start drag from the node element.
+    titleEl.parentNode.dispatchEvent(new MouseEvent('mousedown', {
+      bubbles: true, cancelable: true, button: 0, buttons: 1,
+      clientX: cx, clientY: cy, view: window,
+    }));
+    // mousemove events must go to graphPane (that is where the drag handler lives).
+    for (let i = 1; i <= 5; i++) {
+      pane.dispatchEvent(new MouseEvent('mousemove', {
+        bubbles: true, cancelable: true,
+        clientX: cx + (tx - cx) * i / 5,
+        clientY: cy + (ty - cy) * i / 5,
+      }));
+    }
+    // End drag on window (matches the production mouseup listener).
+    window.dispatchEvent(new MouseEvent('mouseup', {
+      bubbles: true, cancelable: true, clientX: tx, clientY: ty,
+    }));
+  }, nodeId);
+}
+
+/**
+ * Simulate dragging from one node to another, triggering the drag-to-connect
+ * (edge creation) flow. Uses JS-dispatched events via page.evaluate so that
+ * element targeting is based on the live DOM and is reliable regardless of
+ * SVG coordinate transforms.
+ *
+ * The helper searches the target node's bounding box for a hit point that
+ * elementFromPoint resolves to the correct node — necessary because edge
+ * arrowheads (g.edge polygons) can overlap node centers and would otherwise
+ * be returned instead of the node itself.
+ */
+export async function dragFromNodeToNode(page, fromId, toId) {
+  await page.evaluate(({ fromId, toId }) => {
+    const getNode = (id) => {
+      const titleEl = Array.from(
+        document.querySelectorAll('#graph svg g.node > title'),
+      ).find((t) => t.textContent === id);
+      if (!titleEl) throw new Error(`node "${id}" not found`);
+      return titleEl.parentNode;
+    };
+    const fromG = getNode(fromId);
+    const toG = getNode(toId);
+    const fromR = fromG.getBoundingClientRect();
+    const toR = toG.getBoundingClientRect();
+    const fx = fromR.left + fromR.width / 2;
+    const fy = fromR.top + fromR.height / 2;
+    const tx = toR.left + toR.width / 2;
+
+    // Search the target node's bounding box for a hit point where
+    // elementFromPoint correctly resolves to the target node. Edge arrowhead
+    // polygons can overlap the node center and would return a g.edge instead.
+    const testOffsets = [0, 0.3, -0.3, 0.45, -0.45]; // fractions of half-height
+    let goodTy = toR.top + toR.height / 2;
+    for (const frac of testOffsets) {
+      const testY = toR.top + toR.height * (0.5 + frac);
+      const el = document.elementFromPoint(tx, testY);
+      if (el?.closest('g.node')?.querySelector('title')?.textContent === toId) {
+        goodTy = testY;
+        break;
+      }
+    }
+
+    const pane = document.querySelector('#graph-pane');
+    // Start drag from the source node element.
+    fromG.dispatchEvent(new MouseEvent('mousedown', {
+      bubbles: true, cancelable: true, button: 0, buttons: 1,
+      clientX: fx, clientY: fy, view: window,
+    }));
+    // mousemove events on graphPane to trigger updateDragTo and set dragState.moved.
+    for (let i = 1; i <= 5; i++) {
+      pane.dispatchEvent(new MouseEvent('mousemove', {
+        bubbles: true, cancelable: true,
+        clientX: fx + (tx - fx) * i / 5,
+        clientY: fy + (goodTy - fy) * i / 5,
+      }));
+    }
+    // End drag on window at the valid hit point on the target node.
+    window.dispatchEvent(new MouseEvent('mouseup', {
+      bubbles: true, cancelable: true, clientX: tx, clientY: goodTy,
+    }));
+  }, { fromId, toId });
+}

@@ -1183,11 +1183,28 @@ function commitRenameAndFocusGraph() {
 }
 
 function cancelRenameEditor() {
+  const session = renameSession;
+  const wasComposite = compositeAction;
   // Clear the composite flag. No snapshot is needed here: the snapshot pushed
   // by addNode already covers the entire composite (node + any auto-edge),
   // so Ctrl+Z will undo all of it in one step.
   compositeAction = false;
   closeRenameEditor();
+  // Aborting rename while renaming a just-added node should abort the add-node
+  // operation entirely.
+  if (
+    wasComposite &&
+    session &&
+    session.type === 'node' &&
+    typeof session.key === 'string' &&
+    session.key !== ''
+  ) {
+    const nodeId = session.key;
+    state.nodes = state.nodes.filter((n) => n.id !== nodeId);
+    state.edges = state.edges.filter((e) => e.from !== nodeId && e.to !== nodeId);
+    state.selected.clear();
+    render();
+  }
 }
 
 function commitRenameEditor() {

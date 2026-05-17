@@ -42,6 +42,9 @@ document.querySelector('#app').innerHTML = `
       </div>
     </form>
   </div>
+  <div id="context-menu" role="menu" aria-label="Node actions" hidden>
+    <button id="context-delete-node" type="button" role="menuitem">Delete node</button>
+  </div>
 `;
 
 // ---------- State ----------
@@ -80,6 +83,8 @@ const renameTitle = document.querySelector('#rename-title');
 const renameLabel = document.querySelector('#rename-label');
 const renameInput = document.querySelector('#rename-input');
 const btnRenameCancel = document.querySelector('#rename-cancel');
+const contextMenu = document.querySelector('#context-menu');
+const btnContextDeleteNode = document.querySelector('#context-delete-node');
 dragSvg.style.display = 'none';
 marqueeSvg.style.display = 'none';
 
@@ -141,10 +146,17 @@ let renameSession = null; // { type: 'node'|'edge', key: string, initialValue: s
 let panState = null;         // { startX, startY, startTx, startTy }
 let pinchState = null;       // { startDist, startMidX, startMidY, startTx, startTy, startS }
 let marqueeState = null;     // { startX, startY, x, y, width, height, additive, moved }
+let longPressState = null;   // { id, startX, startY, timer }
 let suppressNextBackgroundClick = false;
+let suppressNextNodeClick = false;
+let contextMenuState = null; // { type: 'node', key: string } | null
 // Double-tap detection for touch devices (browser won't synthesise dblclick when
 // touch-action:none is set).  Tracks the most recent single-finger background tap.
 let lastBackgroundTap = null; // { x, y, time } | null
+const FALLBACK_CONTEXT_MENU_WIDTH = 164;
+const FALLBACK_CONTEXT_MENU_HEIGHT = 50;
+const LONG_PRESS_MS = 500;
+const LONG_PRESS_MOVE_PX = 8;
 const DOUBLE_TAP_MS = 300;   // max ms between taps to count as double-tap
 const DOUBLE_TAP_PX = 30;    // max movement (px) for a touch to count as a tap
 let needsInitialFit = true; // fit content into view after the first render
@@ -169,6 +181,7 @@ function isTextEditingElement(el) {
   return !!(el && (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT' || el.isContentEditable));
 }
 function selectionRef(type, key) { return `${type}:${key}`; }
+function pointDistance(x1, y1, x2, y2) { return Math.hypot(x2 - x1, y2 - y1); }
 function isGraphElementTarget(target) {
   return !!target?.closest?.('g.node, g.edge');
 }
@@ -594,6 +607,61 @@ function cancelDrag() {
   dragSvg.style.display = 'none';
 }
 
+function closeContextMenu() {
+  contextMenuState = null;
+  contextMenu.hidden = true;
+}
+
+function openContextMenuForNode(id, clientX, clientY) {
+  const MENU_MARGIN = 12;
+  contextMenuState = { type: 'node', key: id };
+  contextMenu.hidden = false;
+  const { width: measuredWidth, height: measuredHeight } = contextMenu.getBoundingClientRect();
+  const menuWidth = measuredWidth || FALLBACK_CONTEXT_MENU_WIDTH;
+  const menuHeight = measuredHeight || FALLBACK_CONTEXT_MENU_HEIGHT;
+  const rightEdgeLimit = Math.max(MENU_MARGIN, window.innerWidth - menuWidth - MENU_MARGIN);
+  const bottomEdgeLimit = Math.max(MENU_MARGIN, window.innerHeight - menuHeight - MENU_MARGIN);
+  contextMenu.style.left = `${Math.max(MENU_MARGIN, Math.min(clientX + 8, rightEdgeLimit))}px`;
+  contextMenu.style.top = `${Math.max(MENU_MARGIN, Math.min(clientY + 8, bottomEdgeLimit))}px`;
+}
+
+function cancelLongPress() {
+  if (!longPressState) return;
+  clearTimeout(longPressState.timer);
+  longPressState = null;
+}
+
+function updateLongPress(clientX, clientY) {
+  if (!longPressState) return;
+  if (pointDistance(longPressState.startX, longPressState.startY, clientX, clientY) > LONG_PRESS_MOVE_PX) {
+    cancelLongPress();
+  }
+}
+
+function triggerLongPress(id, clientX, clientY) {
+  cancelDrag();
+  suppressNextNodeClick = true;
+  suppressNextBackgroundClick = true;
+  setSingleSelection('node', id);
+  render();
+  graphPane.focus({ preventScroll: true });
+  openContextMenuForNode(id, clientX, clientY);
+}
+
+function startLongPress(id, clientX, clientY) {
+  cancelLongPress();
+  longPressState = {
+    id,
+    startX: clientX,
+    startY: clientY,
+    timer: window.setTimeout(() => {
+      if (!longPressState || longPressState.id !== id) return;
+      longPressState = null;
+      triggerLongPress(id, clientX, clientY);
+    }, LONG_PRESS_MS),
+  };
+}
+
 function boxesIntersect(a, b) {
   return a.x <= b.x + b.width &&
     a.x + a.width >= b.x &&
@@ -695,19 +763,27 @@ function attachGraphInteractions(svgEl) {
     g.addEventListener('mousedown', (ev) => {
       if (ev.button !== 0) return;
       ev.stopPropagation();
+      closeContextMenu();
       beginDragFromNode(id, ev.clientX, ev.clientY);
+      startLongPress(id, ev.clientX, ev.clientY);
     });
 
     // Touch support: start a drag on touchstart with a single finger.
     g.addEventListener('touchstart', (ev) => {
       if (ev.touches.length !== 1) return;
       ev.stopPropagation();
+      closeContextMenu();
       const t = ev.touches[0];
       beginDragFromNode(id, t.clientX, t.clientY);
+      startLongPress(id, t.clientX, t.clientY);
     }, { passive: true });
 
     g.addEventListener('click', (ev) => {
       ev.stopPropagation();
+      if (suppressNextNodeClick) {
+        suppressNextNodeClick = false;
+        return;
+      }
       if (ev.ctrlKey || ev.metaKey) selectNode(id, { toggle: true });
       else selectNode(id);
     });
@@ -715,6 +791,7 @@ function attachGraphInteractions(svgEl) {
     g.addEventListener('dblclick', (ev) => {
       ev.stopPropagation();
       ev.preventDefault();
+      closeContextMenu();
       renameNode(id);
     });
   }
@@ -743,6 +820,7 @@ function attachGraphInteractions(svgEl) {
 // Pane-level handlers (background clicks / dbl-clicks, drag completion).
 graphPane.addEventListener('mousemove', (ev) => {
   if (!dragState) return;
+  updateLongPress(ev.clientX, ev.clientY);
   updateDragTo(ev.clientX, ev.clientY);
 });
 
@@ -755,6 +833,7 @@ graphPane.addEventListener('touchmove', (ev) => {
     if (ev.touches.length !== 1) return;
     ev.preventDefault();
     const t = ev.touches[0];
+    updateLongPress(t.clientX, t.clientY);
     updateDragTo(t.clientX, t.clientY);
     return;
   }
@@ -854,6 +933,7 @@ graphPane.addEventListener('touchstart', (ev) => {
 
 // Pan mousemove on window so panning continues even when cursor leaves the pane.
 window.addEventListener('mousemove', (ev) => {
+  updateLongPress(ev.clientX, ev.clientY);
   if (marqueeState) {
     updateMarquee(ev.clientX, ev.clientY);
     return;
@@ -866,6 +946,7 @@ window.addEventListener('mousemove', (ev) => {
 });
 
 window.addEventListener('mouseup', (ev) => {
+  cancelLongPress();
   if (dragState) finishDragAt(ev.clientX, ev.clientY);
   if (marqueeState) finishMarquee();
   if (panState) {
@@ -890,6 +971,7 @@ graphPane.addEventListener('wheel', (ev) => {
 
 // Touch equivalents of mouseup and touchcancel: end node-drag, pan, or pinch.
 window.addEventListener('touchend', (ev) => {
+  cancelLongPress();
   if (dragState) {
     const t = ev.changedTouches[0];
     if (!t) { cancelDrag(); } else { finishDragAt(t.clientX, t.clientY); }
@@ -950,6 +1032,7 @@ window.addEventListener('touchend', (ev) => {
 
 window.addEventListener('touchcancel', () => {
   // cancelDrag() sets dragState = null and hides the drag SVG.
+  cancelLongPress();
   cancelDrag();
   panState = null;
   pinchState = null;
@@ -962,6 +1045,7 @@ graphPane.addEventListener('click', (ev) => {
     suppressNextBackgroundClick = false;
     return;
   }
+  closeContextMenu();
   if (renameSession) commitRenameAndFocusGraph();
   clearSelection();
   graphPane.focus({ preventScroll: true });
@@ -969,6 +1053,7 @@ graphPane.addEventListener('click', (ev) => {
 
 graphPane.addEventListener('dblclick', (ev) => {
   if (isGraphElementTarget(ev.target)) return;
+  closeContextMenu();
   addNode(undefined, { select: true, rename: true });
 });
 
@@ -990,6 +1075,27 @@ btnRenameCancel.addEventListener('click', () => {
   cancelRenameEditor();
   graphPane.focus({ preventScroll: true });
 });
+
+btnContextDeleteNode.addEventListener('click', () => {
+  if (contextMenuState?.type !== 'node') {
+    closeContextMenu();
+    return;
+  }
+  setSingleSelection('node', contextMenuState.key);
+  deleteSelection();
+  closeContextMenu();
+  graphPane.focus({ preventScroll: true });
+});
+
+window.addEventListener('mousedown', (ev) => {
+  if (contextMenu.hidden || contextMenu.contains(ev.target)) return;
+  closeContextMenu();
+});
+
+window.addEventListener('touchstart', (ev) => {
+  if (contextMenu.hidden || contextMenu.contains(ev.target)) return;
+  closeContextMenu();
+}, { passive: true });
 
 renameModal.addEventListener('click', (ev) => {
   if (ev.target !== renameModal) return;
@@ -1021,6 +1127,12 @@ window.addEventListener('keydown', (ev) => {
   }
 
   if (isTextEditingElement(ae)) return;
+  if (ev.key === 'Escape' && !contextMenu.hidden) {
+    ev.preventDefault();
+    closeContextMenu();
+    graphPane.focus({ preventScroll: true });
+    return;
+  }
   if ((ev.key === 'Delete' || ev.key === 'Backspace') && hasSelection()) {
     ev.preventDefault();
     deleteSelection();
@@ -1109,14 +1221,17 @@ function addEdge(from, to) {
 }
 
 function renameNode(id) {
+  closeContextMenu();
   openRenameEditor('node', id);
 }
 
 function renameEdge(key) {
+  closeContextMenu();
   openRenameEditor('edge', key);
 }
 
 function selectNode(id, { toggle = false } = {}) {
+  closeContextMenu();
   if (toggle) toggleSelection('node', id);
   else setSingleSelection('node', id);
   render();
@@ -1124,6 +1239,7 @@ function selectNode(id, { toggle = false } = {}) {
 }
 
 function selectEdge(key, { toggle = false } = {}) {
+  closeContextMenu();
   if (toggle) toggleSelection('edge', key);
   else setSingleSelection('edge', key);
   render();
@@ -1131,12 +1247,14 @@ function selectEdge(key, { toggle = false } = {}) {
 }
 
 function clearSelection() {
+  closeContextMenu();
   if (!hasSelection()) return;
   state.selected.clear();
   render();
 }
 
 function deleteSelection() {
+  closeContextMenu();
   if (!hasSelection()) return;
   pushSnapshot();
   const selectedNodes = new Set();
@@ -1231,6 +1349,7 @@ function commitRenameEditor() {
 }
 
 function openRenameEditor(type, key) {
+  closeContextMenu();
   if (renameSession) commitRenameEditor();
   const initialValue = getRenameValue(type, key);
   if (initialValue == null) return;

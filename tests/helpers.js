@@ -1,6 +1,10 @@
 // Shared helpers for AutoGraph Playwright UI tests.
 import { expect } from '@playwright/test';
 
+// Keep the synthetic hold just above the production 500 ms threshold so the
+// test is fast while still reliably triggering the long-press behavior.
+const LONG_PRESS_TEST_HOLD_MS = 520;
+
 /**
  * Open the app with a clean localStorage and wait until the initial render
  * has emitted the default graph SVG.
@@ -84,6 +88,46 @@ export async function clickNode(page, id, { dblclick = false } = {}) {
     },
     { id, dblclick },
   );
+}
+
+/** Press and hold a node long enough to trigger the node context menu. */
+export async function pressAndHoldNode(page, id, { holdMs = LONG_PRESS_TEST_HOLD_MS } = {}) {
+  await page.evaluate(
+    async ({ id, holdMs }) => {
+      const titles = document.querySelectorAll('#graph svg g.node > title');
+      const titleEl = Array.from(titles).find((t) => t.textContent === id);
+      if (!titleEl) throw new Error(`node ${id} not found`);
+      const g = titleEl.parentNode;
+      const rect = g.getBoundingClientRect();
+      const clientX = rect.left + rect.width / 2;
+      const clientY = rect.top + rect.height / 2;
+      const init = {
+        bubbles: true,
+        cancelable: true,
+        button: 0,
+        buttons: 1,
+        clientX,
+        clientY,
+        view: window,
+      };
+      g.dispatchEvent(new MouseEvent('mousedown', init));
+      await new Promise((resolve) => window.setTimeout(resolve, holdMs));
+      g.dispatchEvent(new MouseEvent('mouseup', { ...init, buttons: 0 }));
+      g.dispatchEvent(new MouseEvent('click', { ...init, buttons: 0 }));
+    },
+    { id, holdMs },
+  );
+}
+
+/** Real pointer long-press on a node using Playwright mouse events. */
+export async function mousePressAndHoldNode(page, id, { holdMs = LONG_PRESS_TEST_HOLD_MS } = {}) {
+  const box = await nodeLocator(page, id).boundingBox();
+  if (!box) throw new Error(`node ${id} has no bounding box`);
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.waitForTimeout(holdMs);
+  await expect(page.locator('#context-menu')).toBeVisible();
+  await page.mouse.up();
 }
 
 /** Locator for an edge group whose <title> matches "from->to". */

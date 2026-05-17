@@ -4,6 +4,7 @@ import {
   edgeLocator,
   clickNode,
   pressAndHoldNode,
+  mousePressAndHoldNode,
   dblClickGraphBackground,
   clickGraphBackground,
   fillRenameDialog,
@@ -108,6 +109,17 @@ test.describe('node and edge editing', () => {
     await pressAndHoldNode(page, 'a');
     await expect(page.locator('#context-menu')).toBeVisible();
     await expect(page.locator('#context-delete-node')).toBeVisible();
+    await page.locator('#context-delete-node').click();
+    await expect(page.locator('#context-menu')).toBeHidden();
+    await expectNodeCount(page, 1);
+    await expectEdgeCount(page, 0);
+    await expect(page.locator('#graph svg g.node title')).toHaveText('b');
+  });
+
+  test('real mouse press-and-hold keeps the menu open on release and deletes the held node', async ({ page }) => {
+    await openApp(page);
+    await mousePressAndHoldNode(page, 'a');
+    await expect(page.locator('#context-menu')).toBeVisible();
     await page.locator('#context-delete-node').click();
     await expect(page.locator('#context-menu')).toBeHidden();
     await expectNodeCount(page, 1);

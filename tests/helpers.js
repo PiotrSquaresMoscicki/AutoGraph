@@ -119,6 +119,17 @@ export async function pressAndHoldNode(page, id, { holdMs = LONG_PRESS_TEST_HOLD
   );
 }
 
+/** Real pointer long-press on a node using Playwright mouse events. */
+export async function mousePressAndHoldNode(page, id, { holdMs = LONG_PRESS_TEST_HOLD_MS } = {}) {
+  const box = await nodeLocator(page, id).boundingBox();
+  if (!box) throw new Error(`node ${id} has no bounding box`);
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.waitForTimeout(holdMs);
+  await expect(page.locator('#context-menu')).toBeVisible();
+  await page.mouse.up();
+}
+
 /** Locator for an edge group whose <title> matches "from->to". */
 export function edgeLocator(page, from, to) {
   return page.locator('#graph svg g.edge', {

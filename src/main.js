@@ -641,6 +641,7 @@ function updateLongPress(clientX, clientY) {
 function triggerLongPress(id, clientX, clientY) {
   cancelDrag();
   suppressNextNodeClick = true;
+  suppressNextBackgroundClick = true;
   setSingleSelection('node', id);
   render();
   graphPane.focus({ preventScroll: true });

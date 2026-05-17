@@ -611,18 +611,14 @@ function closeContextMenu() {
 
 function openContextMenuForNode(id, clientX, clientY) {
   const MENU_MARGIN = 12;
-  const MENU_WIDTH = 160;
-  const MENU_HEIGHT = 52;
   contextMenuState = { type: 'node', key: id };
   contextMenu.hidden = false;
-  contextMenu.style.left = `${Math.min(
-    Math.max(MENU_MARGIN, clientX + 8),
-    Math.max(MENU_MARGIN, window.innerWidth - MENU_WIDTH - MENU_MARGIN),
-  )}px`;
-  contextMenu.style.top = `${Math.min(
-    Math.max(MENU_MARGIN, clientY + 8),
-    Math.max(MENU_MARGIN, window.innerHeight - MENU_HEIGHT - MENU_MARGIN),
-  )}px`;
+  const menuWidth = contextMenu.offsetWidth || 160;
+  const menuHeight = contextMenu.offsetHeight || 52;
+  const maxLeft = Math.max(MENU_MARGIN, window.innerWidth - menuWidth - MENU_MARGIN);
+  const maxTop = Math.max(MENU_MARGIN, window.innerHeight - menuHeight - MENU_MARGIN);
+  contextMenu.style.left = `${Math.max(MENU_MARGIN, Math.min(clientX + 8, maxLeft))}px`;
+  contextMenu.style.top = `${Math.max(MENU_MARGIN, Math.min(clientY + 8, maxTop))}px`;
 }
 
 function cancelLongPress() {

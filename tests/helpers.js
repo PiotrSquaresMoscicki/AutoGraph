@@ -1,6 +1,8 @@
 // Shared helpers for AutoGraph Playwright UI tests.
 import { expect } from '@playwright/test';
 
+const LONG_PRESS_TEST_HOLD_MS = 520;
+
 /**
  * Open the app with a clean localStorage and wait until the initial render
  * has emitted the default graph SVG.
@@ -87,7 +89,7 @@ export async function clickNode(page, id, { dblclick = false } = {}) {
 }
 
 /** Press and hold a node long enough to trigger the node context menu. */
-export async function pressAndHoldNode(page, id, { holdMs = 520 } = {}) {
+export async function pressAndHoldNode(page, id, { holdMs = LONG_PRESS_TEST_HOLD_MS } = {}) {
   await page.evaluate(
     async ({ id, holdMs }) => {
       const titles = document.querySelectorAll('#graph svg g.node > title');

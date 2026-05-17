@@ -616,12 +616,13 @@ function openContextMenuForNode(id, clientX, clientY) {
   const MENU_MARGIN = 12;
   contextMenuState = { type: 'node', key: id };
   contextMenu.hidden = false;
-  const menuWidth = contextMenu.offsetWidth || DEFAULT_CONTEXT_MENU_WIDTH;
-  const menuHeight = contextMenu.offsetHeight || DEFAULT_CONTEXT_MENU_HEIGHT;
-  const maxLeft = Math.max(MENU_MARGIN, window.innerWidth - menuWidth - MENU_MARGIN);
-  const maxTop = Math.max(MENU_MARGIN, window.innerHeight - menuHeight - MENU_MARGIN);
-  contextMenu.style.left = `${Math.max(MENU_MARGIN, Math.min(clientX + 8, maxLeft))}px`;
-  contextMenu.style.top = `${Math.max(MENU_MARGIN, Math.min(clientY + 8, maxTop))}px`;
+  const { width: measuredWidth, height: measuredHeight } = contextMenu.getBoundingClientRect();
+  const menuWidth = measuredWidth || DEFAULT_CONTEXT_MENU_WIDTH;
+  const menuHeight = measuredHeight || DEFAULT_CONTEXT_MENU_HEIGHT;
+  const rightEdgeLimit = Math.max(MENU_MARGIN, window.innerWidth - menuWidth - MENU_MARGIN);
+  const bottomEdgeLimit = Math.max(MENU_MARGIN, window.innerHeight - menuHeight - MENU_MARGIN);
+  contextMenu.style.left = `${Math.max(MENU_MARGIN, Math.min(clientX + 8, rightEdgeLimit))}px`;
+  contextMenu.style.top = `${Math.max(MENU_MARGIN, Math.min(clientY + 8, bottomEdgeLimit))}px`;
 }
 
 function cancelLongPress() {

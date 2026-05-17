@@ -3,6 +3,7 @@ import {
   openApp,
   edgeLocator,
   clickNode,
+  pressAndHoldNode,
   dblClickGraphBackground,
   clickGraphBackground,
   fillRenameDialog,
@@ -100,6 +101,18 @@ test.describe('node and edge editing', () => {
     await clickNode(page, 'b', { dblclick: true });
     await fillRenameDialog(page, 'Beta');
     await expect(page.locator('#graph svg g.node text', { hasText: 'Beta' })).toHaveCount(1);
+  });
+
+  test('press-and-hold on a node opens a context menu with delete', async ({ page }) => {
+    await openApp(page);
+    await pressAndHoldNode(page, 'a');
+    await expect(page.locator('#context-menu')).toBeVisible();
+    await expect(page.locator('#context-delete-node')).toBeVisible();
+    await page.locator('#context-delete-node').click();
+    await expect(page.locator('#context-menu')).toBeHidden();
+    await expectNodeCount(page, 1);
+    await expectEdgeCount(page, 0);
+    await expect(page.locator('#graph svg g.node title')).toHaveText('b');
   });
 
   test('F2 / Enter renames the selected edge', async ({ page }) => {

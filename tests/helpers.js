@@ -86,6 +86,35 @@ export async function clickNode(page, id, { dblclick = false } = {}) {
   );
 }
 
+/** Press and hold a node long enough to trigger the node context menu. */
+export async function pressAndHoldNode(page, id, { holdMs = 650 } = {}) {
+  await page.evaluate(
+    async ({ id, holdMs }) => {
+      const titles = document.querySelectorAll('#graph svg g.node > title');
+      const titleEl = Array.from(titles).find((t) => t.textContent === id);
+      if (!titleEl) throw new Error(`node ${id} not found`);
+      const g = titleEl.parentNode;
+      const rect = g.getBoundingClientRect();
+      const clientX = rect.left + rect.width / 2;
+      const clientY = rect.top + rect.height / 2;
+      const init = {
+        bubbles: true,
+        cancelable: true,
+        button: 0,
+        buttons: 1,
+        clientX,
+        clientY,
+        view: window,
+      };
+      g.dispatchEvent(new MouseEvent('mousedown', init));
+      await new Promise((resolve) => window.setTimeout(resolve, holdMs));
+      g.dispatchEvent(new MouseEvent('mouseup', { ...init, buttons: 0 }));
+      g.dispatchEvent(new MouseEvent('click', { ...init, buttons: 0 }));
+    },
+    { id, holdMs },
+  );
+}
+
 /** Locator for an edge group whose <title> matches "from->to". */
 export function edgeLocator(page, from, to) {
   return page.locator('#graph svg g.edge', {

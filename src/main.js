@@ -153,8 +153,8 @@ let contextMenuState = null; // { type: 'node', key: string } | null
 // Double-tap detection for touch devices (browser won't synthesise dblclick when
 // touch-action:none is set).  Tracks the most recent single-finger background tap.
 let lastBackgroundTap = null; // { x, y, time } | null
-const DEFAULT_CONTEXT_MENU_WIDTH = 160;
-const DEFAULT_CONTEXT_MENU_HEIGHT = 52;
+const FALLBACK_CONTEXT_MENU_WIDTH = 164;
+const FALLBACK_CONTEXT_MENU_HEIGHT = 50;
 const LONG_PRESS_MS = 500;
 const LONG_PRESS_MOVE_PX = 8;
 const DOUBLE_TAP_MS = 300;   // max ms between taps to count as double-tap
@@ -617,8 +617,8 @@ function openContextMenuForNode(id, clientX, clientY) {
   contextMenuState = { type: 'node', key: id };
   contextMenu.hidden = false;
   const { width: measuredWidth, height: measuredHeight } = contextMenu.getBoundingClientRect();
-  const menuWidth = measuredWidth || DEFAULT_CONTEXT_MENU_WIDTH;
-  const menuHeight = measuredHeight || DEFAULT_CONTEXT_MENU_HEIGHT;
+  const menuWidth = measuredWidth || FALLBACK_CONTEXT_MENU_WIDTH;
+  const menuHeight = measuredHeight || FALLBACK_CONTEXT_MENU_HEIGHT;
   const rightEdgeLimit = Math.max(MENU_MARGIN, window.innerWidth - menuWidth - MENU_MARGIN);
   const bottomEdgeLimit = Math.max(MENU_MARGIN, window.innerHeight - menuHeight - MENU_MARGIN);
   contextMenu.style.left = `${Math.max(MENU_MARGIN, Math.min(clientX + 8, rightEdgeLimit))}px`;
@@ -1082,6 +1082,7 @@ btnContextDeleteNode.addEventListener('click', () => {
   }
   setSingleSelection('node', contextMenuState.key);
   deleteSelection();
+  closeContextMenu();
   graphPane.focus({ preventScroll: true });
 });
 

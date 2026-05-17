@@ -1,6 +1,8 @@
 // Shared helpers for AutoGraph Playwright UI tests.
 import { expect } from '@playwright/test';
 
+// Keep the synthetic hold just above the production 500 ms threshold so the
+// test is fast while still reliably triggering the long-press behavior.
 const LONG_PRESS_TEST_HOLD_MS = 520;
 
 /**

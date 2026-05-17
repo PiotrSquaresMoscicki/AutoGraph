@@ -42,8 +42,9 @@ document.querySelector('#app').innerHTML = `
       </div>
     </form>
   </div>
-  <div id="context-menu" role="menu" aria-label="Node actions" hidden>
+  <div id="context-menu" role="menu" aria-label="Actions" hidden>
     <button id="context-delete-node" type="button" role="menuitem">Delete node</button>
+    <button id="context-delete-edge" type="button" role="menuitem" hidden>Delete edge</button>
   </div>
 `;
 
@@ -85,6 +86,7 @@ const renameInput = document.querySelector('#rename-input');
 const btnRenameCancel = document.querySelector('#rename-cancel');
 const contextMenu = document.querySelector('#context-menu');
 const btnContextDeleteNode = document.querySelector('#context-delete-node');
+const btnContextDeleteEdge = document.querySelector('#context-delete-edge');
 dragSvg.style.display = 'none';
 marqueeSvg.style.display = 'none';
 
@@ -146,10 +148,11 @@ let renameSession = null; // { type: 'node'|'edge', key: string, initialValue: s
 let panState = null;         // { startX, startY, startTx, startTy }
 let pinchState = null;       // { startDist, startMidX, startMidY, startTx, startTy, startS }
 let marqueeState = null;     // { startX, startY, x, y, width, height, additive, moved }
-let longPressState = null;   // { id, startX, startY, timer }
+let longPressState = null;   // { type, target, startX, startY, timer }
 let suppressNextBackgroundClick = false;
 let suppressNextNodeClick = false;
-let contextMenuState = null; // { type: 'node', key: string } | null
+let suppressNextEdgeClick = false;
+let contextMenuState = null; // { type: 'node'|'edge', key: string } | null
 // Double-tap detection for touch devices (browser won't synthesise dblclick when
 // touch-action:none is set).  Tracks the most recent single-finger background tap.
 let lastBackgroundTap = null; // { x, y, time } | null
@@ -612,10 +615,8 @@ function closeContextMenu() {
   contextMenu.hidden = true;
 }
 
-function openContextMenuForNode(id, clientX, clientY) {
+function positionContextMenu(clientX, clientY) {
   const MENU_MARGIN = 12;
-  contextMenuState = { type: 'node', key: id };
-  contextMenu.hidden = false;
   const { width: measuredWidth, height: measuredHeight } = contextMenu.getBoundingClientRect();
   const menuWidth = measuredWidth || FALLBACK_CONTEXT_MENU_WIDTH;
   const menuHeight = measuredHeight || FALLBACK_CONTEXT_MENU_HEIGHT;
@@ -623,6 +624,22 @@ function openContextMenuForNode(id, clientX, clientY) {
   const bottomEdgeLimit = Math.max(MENU_MARGIN, window.innerHeight - menuHeight - MENU_MARGIN);
   contextMenu.style.left = `${Math.max(MENU_MARGIN, Math.min(clientX + 8, rightEdgeLimit))}px`;
   contextMenu.style.top = `${Math.max(MENU_MARGIN, Math.min(clientY + 8, bottomEdgeLimit))}px`;
+}
+
+function openContextMenuForNode(id, clientX, clientY) {
+  contextMenuState = { type: 'node', key: id };
+  btnContextDeleteNode.hidden = false;
+  btnContextDeleteEdge.hidden = true;
+  contextMenu.hidden = false;
+  positionContextMenu(clientX, clientY);
+}
+
+function openContextMenuForEdge(key, clientX, clientY) {
+  contextMenuState = { type: 'edge', key };
+  btnContextDeleteNode.hidden = true;
+  btnContextDeleteEdge.hidden = false;
+  contextMenu.hidden = false;
+  positionContextMenu(clientX, clientY);
 }
 
 function cancelLongPress() {
@@ -648,18 +665,29 @@ function triggerLongPress(id, clientX, clientY) {
   openContextMenuForNode(id, clientX, clientY);
 }
 
-function startLongPress(id, clientX, clientY) {
+function startLongPress(type, target, clientX, clientY) {
   cancelLongPress();
   longPressState = {
-    id,
+    type,
+    target,
     startX: clientX,
     startY: clientY,
     timer: window.setTimeout(() => {
-      if (!longPressState || longPressState.id !== id) return;
+      if (!longPressState || longPressState.target !== target) return;
       longPressState = null;
-      triggerLongPress(id, clientX, clientY);
+      if (type === 'node') triggerLongPress(target, clientX, clientY);
+      else triggerEdgeLongPress(target, clientX, clientY);
     }, LONG_PRESS_MS),
   };
+}
+
+function triggerEdgeLongPress(key, clientX, clientY) {
+  suppressNextEdgeClick = true;
+  suppressNextBackgroundClick = true;
+  setSingleSelection('edge', key);
+  render();
+  graphPane.focus({ preventScroll: true });
+  openContextMenuForEdge(key, clientX, clientY);
 }
 
 function boxesIntersect(a, b) {
@@ -765,7 +793,7 @@ function attachGraphInteractions(svgEl) {
       ev.stopPropagation();
       closeContextMenu();
       beginDragFromNode(id, ev.clientX, ev.clientY);
-      startLongPress(id, ev.clientX, ev.clientY);
+      startLongPress('node', id, ev.clientX, ev.clientY);
     });
 
     // Touch support: start a drag on touchstart with a single finger.
@@ -775,7 +803,7 @@ function attachGraphInteractions(svgEl) {
       closeContextMenu();
       const t = ev.touches[0];
       beginDragFromNode(id, t.clientX, t.clientY);
-      startLongPress(id, t.clientX, t.clientY);
+      startLongPress('node', id, t.clientX, t.clientY);
     }, { passive: true });
 
     g.addEventListener('click', (ev) => {
@@ -804,8 +832,25 @@ function attachGraphInteractions(svgEl) {
     if (g.__autograph_bound) continue;
     g.__autograph_bound = true;
     const key = getTitle(g);
+    g.addEventListener('mousedown', (ev) => {
+      if (ev.button !== 0) return;
+      ev.stopPropagation();
+      closeContextMenu();
+      startLongPress('edge', key, ev.clientX, ev.clientY);
+    });
+    g.addEventListener('touchstart', (ev) => {
+      if (ev.touches.length !== 1) return;
+      ev.stopPropagation();
+      closeContextMenu();
+      const t = ev.touches[0];
+      startLongPress('edge', key, t.clientX, t.clientY);
+    }, { passive: true });
     g.addEventListener('click', (ev) => {
       ev.stopPropagation();
+      if (suppressNextEdgeClick) {
+        suppressNextEdgeClick = false;
+        return;
+      }
       if (ev.ctrlKey || ev.metaKey) selectEdge(key, { toggle: true });
       else selectEdge(key);
     });
@@ -837,6 +882,8 @@ graphPane.addEventListener('touchmove', (ev) => {
     updateDragTo(t.clientX, t.clientY);
     return;
   }
+  // Cancel long press (e.g. edge long press) if the finger moves too far.
+  if (ev.touches.length === 1) updateLongPress(ev.touches[0].clientX, ev.touches[0].clientY);
   if (panState && ev.touches.length >= 1) {
     // Single-finger background pan.
     ev.preventDefault();
@@ -1082,6 +1129,17 @@ btnContextDeleteNode.addEventListener('click', () => {
     return;
   }
   setSingleSelection('node', contextMenuState.key);
+  deleteSelection();
+  closeContextMenu();
+  graphPane.focus({ preventScroll: true });
+});
+
+btnContextDeleteEdge.addEventListener('click', () => {
+  if (contextMenuState?.type !== 'edge') {
+    closeContextMenu();
+    return;
+  }
+  setSingleSelection('edge', contextMenuState.key);
   deleteSelection();
   closeContextMenu();
   graphPane.focus({ preventScroll: true });

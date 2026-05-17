@@ -153,6 +153,8 @@ let contextMenuState = null; // { type: 'node', key: string } | null
 // Double-tap detection for touch devices (browser won't synthesise dblclick when
 // touch-action:none is set).  Tracks the most recent single-finger background tap.
 let lastBackgroundTap = null; // { x, y, time } | null
+const DEFAULT_CONTEXT_MENU_WIDTH = 160;
+const DEFAULT_CONTEXT_MENU_HEIGHT = 52;
 const LONG_PRESS_MS = 500;
 const LONG_PRESS_MOVE_PX = 8;
 const DOUBLE_TAP_MS = 300;   // max ms between taps to count as double-tap
@@ -179,6 +181,7 @@ function isTextEditingElement(el) {
   return !!(el && (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT' || el.isContentEditable));
 }
 function selectionRef(type, key) { return `${type}:${key}`; }
+function pointDistance(x1, y1, x2, y2) { return Math.hypot(x2 - x1, y2 - y1); }
 function isGraphElementTarget(target) {
   return !!target?.closest?.('g.node, g.edge');
 }
@@ -613,8 +616,8 @@ function openContextMenuForNode(id, clientX, clientY) {
   const MENU_MARGIN = 12;
   contextMenuState = { type: 'node', key: id };
   contextMenu.hidden = false;
-  const menuWidth = contextMenu.offsetWidth || 160;
-  const menuHeight = contextMenu.offsetHeight || 52;
+  const menuWidth = contextMenu.offsetWidth || DEFAULT_CONTEXT_MENU_WIDTH;
+  const menuHeight = contextMenu.offsetHeight || DEFAULT_CONTEXT_MENU_HEIGHT;
   const maxLeft = Math.max(MENU_MARGIN, window.innerWidth - menuWidth - MENU_MARGIN);
   const maxTop = Math.max(MENU_MARGIN, window.innerHeight - menuHeight - MENU_MARGIN);
   contextMenu.style.left = `${Math.max(MENU_MARGIN, Math.min(clientX + 8, maxLeft))}px`;
@@ -629,7 +632,7 @@ function cancelLongPress() {
 
 function updateLongPress(clientX, clientY) {
   if (!longPressState) return;
-  if (Math.hypot(clientX - longPressState.startX, clientY - longPressState.startY) > LONG_PRESS_MOVE_PX) {
+  if (pointDistance(longPressState.startX, longPressState.startY, clientX, clientY) > LONG_PRESS_MOVE_PX) {
     cancelLongPress();
   }
 }

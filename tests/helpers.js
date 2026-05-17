@@ -87,7 +87,7 @@ export async function clickNode(page, id, { dblclick = false } = {}) {
 }
 
 /** Press and hold a node long enough to trigger the node context menu. */
-export async function pressAndHoldNode(page, id, { holdMs = 575 } = {}) {
+export async function pressAndHoldNode(page, id, { holdMs = 520 } = {}) {
   await page.evaluate(
     async ({ id, holdMs }) => {
       const titles = document.querySelectorAll('#graph svg g.node > title');

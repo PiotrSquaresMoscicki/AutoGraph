@@ -4,7 +4,9 @@ import {
   edgeLocator,
   clickNode,
   pressAndHoldNode,
+  pressAndHoldEdge,
   mousePressAndHoldNode,
+  mousePressAndHoldEdge,
   dblClickGraphBackground,
   clickGraphBackground,
   fillRenameDialog,
@@ -125,6 +127,29 @@ test.describe('node and edge editing', () => {
     await expectNodeCount(page, 1);
     await expectEdgeCount(page, 0);
     await expect(page.locator('#graph svg g.node title')).toHaveText('b');
+  });
+
+  test('press-and-hold on an edge opens a context menu with delete edge option', async ({ page }) => {
+    await openApp(page);
+    await pressAndHoldEdge(page, 'a', 'b');
+    await expect(page.locator('#context-menu')).toBeVisible();
+    await expect(page.locator('#context-delete-edge')).toBeVisible();
+    await expect(page.locator('#context-delete-node')).toBeHidden();
+    await page.locator('#context-delete-edge').click();
+    await expect(page.locator('#context-menu')).toBeHidden();
+    await expectEdgeCount(page, 0);
+    await expectNodeCount(page, 2);
+  });
+
+  test('real mouse press-and-hold on an edge opens context menu and deletes the edge', async ({ page }) => {
+    await openApp(page);
+    await mousePressAndHoldEdge(page, 'a', 'b');
+    await expect(page.locator('#context-menu')).toBeVisible();
+    await expect(page.locator('#context-delete-edge')).toBeVisible();
+    await page.locator('#context-delete-edge').click();
+    await expect(page.locator('#context-menu')).toBeHidden();
+    await expectEdgeCount(page, 0);
+    await expectNodeCount(page, 2);
   });
 
   test('F2 / Enter renames the selected edge', async ({ page }) => {
